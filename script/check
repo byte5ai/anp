@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Documentation validation — the CI "test" for this spec repository.
+# Checks: required files present, markdown code fences balanced.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fail=0
+
+echo "== required files =="
+required=(README.md concept-paper.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md AGENTS.md)
+for f in "${required[@]}"; do
+  if [ -f "$f" ]; then
+    echo "  ok: $f"
+  else
+    echo "  MISSING: $f"
+    fail=1
+  fi
+done
+
+echo ""
+echo "== balanced code fences (markdown) =="
+while IFS= read -r f; do
+  n=$(grep -c '^```' "$f" || true)
+  if [ $((n % 2)) -ne 0 ]; then
+    echo "  UNBALANCED ($n fences): $f"
+    fail=1
+  else
+    echo "  ok ($n fences): $f"
+  fi
+done < <(git ls-files '*.md')
+
+echo ""
+if [ "$fail" -ne 0 ]; then
+  echo "docs-check FAILED"
+  exit 1
+fi
+echo "docs-check passed"

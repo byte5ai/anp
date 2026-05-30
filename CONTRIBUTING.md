@@ -2,6 +2,14 @@
 
 ANP (Agent Notarization & Negotiation Protocol) is an open specification. It is currently a **draft concept** (v0.2), which means the most valuable contributions right now are *design feedback* — challenging assumptions, finding gaps, and pressure-testing the protocol against real use cases.
 
+## Setup
+
+This is a documentation repository — no dependencies to install. Run the setup script once to activate the git hooks (which block accidental direct pushes to `main`):
+
+```bash
+script/setup
+```
+
 ## How to contribute
 
 - **Discuss a design question** → open a [GitHub Issue](../../issues). Describe the scenario, the part of the spec it touches (cite the section, e.g. `§9.4`), and what you think is wrong, missing, or ambiguous.

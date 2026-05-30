@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# One-command setup for contributors: activate git hooks.
+# This is a documentation repository — there are no dependencies to install.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+echo "Configuring git hooks (core.hooksPath = .hooks)..."
+git config core.hooksPath .hooks
+
+echo "Running documentation checks..."
+bash script/check
+
+echo ""
+echo "Done. You're set up to contribute."
+echo "  - Branch off main (feat/ fix/ docs/ chore/ refactor/)"
+echo "  - Open a PR; 'docs-check' must pass"
+echo "  - Never push directly to main"
