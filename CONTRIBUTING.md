@@ -13,13 +13,13 @@ script/setup
 ## How to contribute
 
 - **Discuss a design question** → open a [GitHub Issue](../../issues). Describe the scenario, the part of the spec it touches (cite the section, e.g. `§9.4`), and what you think is wrong, missing, or ambiguous.
-- **Propose a change to the spec** → open a Pull Request against [`concept-paper.md`](./concept-paper.md). Keep each PR focused on one coherent change and explain the *why* in the description.
+- **Propose a change to the spec** → open a Pull Request against [`SPEC.md`](./SPEC.md). Keep each PR focused on one coherent change and explain the *why* in the description.
 - **Report a real-world use case** → open an Issue labelled `use-case`. Concrete scenarios sharpen the spec more than abstract debate.
 
 ## What makes a good spec contribution
 
 - **Be concrete.** Cite the section. Prefer "in §7.4 the N-party fork case is undefined because …" over "the contracting flow is unclear."
-- **Respect the design goals** ([§3](./concept-paper.md#3-design-goals--non-goals)): machine-first, anchor-don't-publish, DLT-neutral, identity-rooted, post-quantum-ready at the binding layer, privacy-preserving. A change that breaks one of these needs to justify the trade-off.
+- **Respect the design goals** ([§3](./SPEC.md#3-design-goals--non-goals)): machine-first, anchor-don't-publish, DLT-neutral, identity-rooted, post-quantum-ready at the binding layer, privacy-preserving. A change that breaks one of these needs to justify the trade-off.
 - **State the trust impact.** ANP is honest about residual trust roots (chain account/consensus, terminal arbiter/panel, data availability). If a change shifts trust, say so.
 - **Keep normative language precise.** Use RFC 2119 keywords (MUST / SHOULD / MAY) the way the spec does.
 
