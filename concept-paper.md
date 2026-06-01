@@ -237,7 +237,8 @@ A Mandate **MUST** specify at least:
     "aggregate_value": { "amount": "20000", "currency": "EUR", "window": "P30D" },
     "allowed_counterparties": ["did:iota:…", "*"],
     "allowed_actions": ["offer", "counter_offer", "accept", "attest"],
-    "escalation_threshold": { "amount": "1000", "currency": "EUR" } // above → Principal co-sign
+    "escalation_threshold": { "amount": "1000", "currency": "EUR" }, // at or above → Principal co-sign
+    "fx_ref": "ECB-EUR-daily"   // conditionally required: when an agreement prices in another asset (EURe→EUR)
   },
   "sub_delegation": { "allowed": false, "max_depth": 0 },
   "not_before": "2026-05-01T00:00:00Z",
@@ -279,13 +280,14 @@ All Objects share one envelope. Type-specific fields live under `body`.
 ```jsonc
 {
   "anp_version": "0.2",
-  "type": "offer | counter_offer | accept | approve | execute | terminate |
+  "type": "offer | counter_offer | accept | approve | execute | terminate | memorandum |
            attest | witness | revoke |
-           dispute | evidence | rule | appeal | enforce",
+           assert | dispute | evidence | rule | appeal | enforce |
+           receipt",
   "object_id": "urn:uuid:…",
   "thread_ref": "urn:uuid:…",          // shared across a negotiation/case
   "sequence": 3,                        // monotonic within the thread
-  "previous_hash": "sha384:…",          // hash-link to predecessor (or null for the first)
+  "previous_hash": "sha3-384:…",        // tagged hash-link to predecessor (or null for the first)
   "timestamp": "2026-05-29T12:00:00Z",  // asserted by signer; on-chain anchor is authoritative
   "suite": "anp-suite-2",               // cryptographic suite identifier (see §6.5)
   "signers": [
@@ -303,6 +305,8 @@ All Objects share one envelope. Type-specific fields live under `body`.
 - `proof` is an array → multi-signature and quorum are first-class. Each proof entry names its algorithm, supporting per-signer agility.
 - **Signer/proof correspondence (normative):** every `proof[]` entry **MUST** correspond 1:1 to a `signers[]` entry with the same `did`; a Verifier **MUST** reject Objects with proofs from non-listed signers or listed signers without a proof. Each signer's `authority` is either a `mandate` (for an Agent acting under §5.3) or an `accreditation` (for a Notary/Oracle/Arbiter under §5.4); the `authority` named is what the Verifier checks the action against.
 - **Suite/alg binding (normative):** the `suite` enumerates the permitted signature `alg` values and the hash algorithm; every `proof.alg` **MUST** be a member of the active `suite`, and all Objects in a Thread **MUST** share the Thread's pinned suite (`terms.governing_suite` where present). See [§6.5](#65-cryptographic-agility--post-quantum-readiness).
+- **Non-anchored type.** `receipt` (a delivery acknowledgement, §6.4) is a **transport-only** Object: it is signed and exchanged peer-to-peer but **not** anchored, and is therefore exempt from the data-availability rule. Every other type is anchored.
+- **`memorandum`** is a single Object co-signed by all parties (multi-signature `proof[]`), used for record-only agreements (§7.2). **`assert`** starts the dispute window (§9.3).
 - `body` **MUST** validate against the JSON Schema registered for `type` (see [Appendix A](#appendix-a-schemas)).
 
 ### 6.2 On-chain anchor record
@@ -317,6 +321,7 @@ What is written to the ledger:
   "status": "active",            // coarse lifecycle flag (see below)
   "anchored_by": "did:iota:…",
   "timestamp": "<ledger time>",
+  "locator": null,               // optional DA CID for the off-chain Object (null if delivered peer-to-peer, §6.4)
   "outcome": null                // null except for `enforce`: a minimal numeric settlement directive (see §6.2.1)
 }
 ```
@@ -334,15 +339,21 @@ Trustless escrow enforcement requires the settlement contract to read *what the 
 ```jsonc
 "outcome": {
   "escrow_id": "0x…",
+  "basis": "ruling",      // "ruling" (challenged path) | "uncontested_assertion" (happy path)
   "release_bps": 7000,    // basis points to the provider
   "refund_bps": 3000,     // basis points back to the payer
   "penalty_bps": 0,       // additional penalty applied
   "fee_source": "loser_bond",
-  "ruling_anchor": "sha3-384:…"   // hash of the off-chain Ruling Object that justifies these numbers
+  "basis_anchor": "sha3-384:…"   // hash of the Ruling (challenged) OR the expired assertion (uncontested)
 }
 ```
 
-This is the **trusted input** the escrow contract acts on. "Trustless enforcement" in this protocol therefore means *enforcement that is automatic and verifiable **given a valid arbiter signature and posted bond***, not zero-trust: the numeric directive is authorized by the (bonded, pre-agreed) Arbiter's signature over the `enforce` Object, and the off-chain Ruling at `ruling_anchor` carries the human-readable rationale. The directive contains only integers and references — no personal data.
+There are **two enforcement paths**, and the `basis` field tells the escrow contract which one applies:
+
+- **Challenged path** (`basis: "ruling"`): `basis_anchor` is the Arbiter/panel **Ruling** hash, and the `enforce` Object **MUST** be signed by the entitled Arbiter/panel. The off-chain Ruling carries the human-readable rationale.
+- **Uncontested path** (`basis: "uncontested_assertion"`): there is no arbiter. `basis_anchor` is the asserting party's `assert` hash; the `enforce` Object is **signed by the asserting party**; and the escrow contract **MUST** verify that `challenge_window` has elapsed since the assertion's anchor timestamp with **no `dispute` anchored** in between, and that the numeric directive **matches the asserted outcome** (full release on an undisputed completion `assert`; full refund on an undisputed non-performance `assert`).
+
+This numeric directive is the **trusted input** the escrow contract acts on. "Trustless enforcement" therefore means *automatic and verifiable **given a valid signature (arbiter or asserter), a posted bond, and an expired challenge window***, not zero-trust. The directive contains only integers and references — no personal data.
 
 ### 6.3 Canonicalization
 
@@ -355,8 +366,8 @@ This is the verified, industry-standard pattern (the same rationale behind EAS o
 - **Off-chain:** the full ANP Object (signed VC-shaped artifact), held by the parties and/or a content-addressed/DA store (e.g., IPFS CID, or a profile-specific availability layer).
 - **On-chain:** only the anchor record (§6.2). Many Objects MAY be anchored under a single **Merkle root** to collapse per-Object cost where a profile supports it.
 - **Data availability is a Core requirement, not an aspiration (C3).** A hash proves *integrity, existence, and ordering*, not *availability* — and §1.2 forbids depending on any single party's storage. Therefore, when an Object's hash is anchored, the anchoring party **MUST** also, atomically with or before the anchor, either:
-  1. **deliver** the full Object to every counterparty named in `signers`/`terms.parties` and collect a **signed receipt** (a lightweight ANP Object acknowledging the hash), **or**
-  2. **place** the Object in a content-addressed **DA layer** referenced by the anchor (CID), with a retention term at least as long as the Thread's dispute/appeal windows.
+  1. **deliver** the full Object to every counterparty named in `signers`/`terms.parties` and collect a **signed `receipt`** — a lightweight, **non-anchored transport acknowledgement** of the hash (type `receipt`, §6.1), itself exempt from anchoring and this DA rule (so there is no recursion), **or**
+  2. **place** the Object in a content-addressed **DA layer**; the CID is carried inside the off-chain Object and MAY be mirrored in the anchor's optional `locator` field (§6.2), with a retention term at least as long as the Thread's dispute/appeal windows.
 - **Void-on-unavailability (normative):** an anchor whose underlying Object cannot be produced on demand **MUST** be treated as **void** in dispute resolution — it cannot be relied upon as evidence and cannot trigger settlement. This removes the incentive to "anchor-and-withhold": an unverifiable anchor benefits no one.
 - Profiles **MUST** specify which DA mechanism(s) they support and the default retention duties.
 
@@ -365,7 +376,7 @@ This is the verified, industry-standard pattern (the same rationale behind EAS o
 Quantum resistance is a **hard requirement at the ANP layer** (a chain that cannot at least be paired with quantum-safe binding artifacts is out of consideration). ANP achieves this independently of the chain's native account cryptography:
 
 - **Suites are versioned and negotiable.** A `suite` identifier enumerates the permitted signature algorithm(s) **and** the hash algorithm. Verifiers **MUST** reject Objects whose suite they do not support; Threads **SHOULD** pin a suite at creation, and every Object's `proof.alg` **MUST** be a member of the active suite.
-- **Tagged hashes (m3).** All on-chain and `previous_hash` digests **MUST** carry an algorithm tag (multihash, or a `sha3-384:` / `sha384:` prefix) matching the active suite, so a Thread pinned to SHA3-384 is unambiguous. (Examples in this document use `sha3-384:`.)
+- **Tagged hashes (m3).** All on-chain and `previous_hash` digests **MUST** carry an algorithm tag (multihash, or a prefix) that **matches the active suite's hash** — `sha3-384:` for a SHA3-384 suite, `sha384:` for a SHA-384 suite — so the algorithm is never ambiguous. Both hashes are permitted (§ below); the tag simply names which one the suite pinned. (Examples in this document use `sha3-384:`.)
 - **Binding signatures sit on off-chain Objects**, so the signature algorithm is chosen by the parties, *not* dictated by the chain. Suites **MAY** use NIST post-quantum signatures — **ML-DSA (FIPS 204)** or **SLH-DSA (FIPS 205)** — today, or hybrid classical+PQC.
 - **On-chain we anchor only hashes**, so hash strength is the relevant chain-side concern. Anchors **MUST** use a hash with ≥256-bit pre-image and ≥192-bit collision resistance against Grover/quantum search — **SHA-384** or **SHA3-384** RECOMMENDED.
 - **Binding authority over on-chain *state* (normative).** Anchoring an Object and mutating an anchor's `status` are themselves authority-bearing actions. To prevent a forged chain account from rewriting history, the right to set/change a Thread's anchor `status` (e.g., `superseded`, `revoked`, `disputed`, `enforced`) **MUST** be gated on a valid PQC-suite signature from the entitled DID — i.e., a status transition is only honored if accompanied by (or references) a correctly-signed ANP Object. A chain key alone **MUST NOT** be sufficient to change semantic state. This pushes the quantum-relevant authority back onto the agile binding layer.
@@ -396,7 +407,7 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
 | `execute` | An **explicit, anchored** Object that opens settlement (escrow). It MAY be auto-*generated* by an agent once the required `accept`/`approve` set exists, but it **MUST** exist as an anchored Object — the `EXECUTED` transition is never implicit, so state is always reconstructable from the ledger (M8). |
 | `terminate` | Ends a Thread before binding acceptance. |
 
-**Agreement modes.** An agreement with `terms.escrow.required = false` and no `acceptance_criteria` is a **Memorandum** — a pure mutual statement of record (an API definition, an agreed wording, a deadline acknowledgement). It terminates at `ACCEPTED` (or `APPROVED`); the `EXECUTED`/`DISPUTED` tail does not apply. This is the low-value, high-frequency case the protocol must serve cheaply: cost ≈ one anchor, no settlement. A **Settlement agreement** (escrow required and/or acceptance criteria present) uses the full machine below.
+**Agreement modes.** A **Memorandum** is a pure mutual statement of record (an API definition, an agreed wording, a deadline acknowledgement) with `terms.escrow.required = false` and no `acceptance_criteria`. It is realized as a **single `memorandum` Object co-signed by all parties** (via the multi-signature `proof[]` array) and anchored **once**, reaching `ACCEPTED` on anchoring, which is terminal (no `EXECUTED`/`DISPUTED` tail). This is the low-value, high-frequency case the protocol serves cheaply: **cost ≈ one anchor**, no settlement. (Parties MAY instead use the ordinary `offer`/`accept` exchange, at two anchors.) A **Settlement agreement** (escrow required and/or acceptance criteria present) uses the full machine below.
 
 ### 7.3 Terms object
 
@@ -420,7 +431,7 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
     "arbiter": "did:iota:arbiterX",
     "process_profile": "urn:anp:dispute:optimistic-v1",
     "challenge_window": "PT24H",
-    "appeal": { "allowed": true, "panel": "urn:anp:panel:tier2" }
+    "appeal": { "allowed": true, "panel": "urn:anp:panel:tier2", "appeal_window": "PT48H" }
   },
   "governing_suite": "anp-suite-2"
 }
@@ -431,28 +442,21 @@ Note how `acceptance_criteria` can reference a required **Attestation** (Pillar 
 ### 7.4 State machine
 
 ```
-   ┌─────────┐  offer / counter_offer (n rounds)   ┌──────────┐
-   │  DRAFT  │ ───────────────────────────────────►│ PROPOSED │
-   └─────────┘                                      └────┬─────┘
-        ▲ terminate              accept (all parties, same head hash) │
-        │                                                             ▼
-   ┌────┴─────┐   below threshold                          ┌──────────────┐
-   │TERMINATED│◄── terminate ─────────────────────────────-│   ACCEPTED   │
-   └──────────┘                                             └──────┬───────┘
-                            approve (if any action ≥ threshold)     │
-                                                                    ▼
-            Memorandum (no escrow/criteria) ──► [terminal]   ┌──────────────┐
-                                                             │   APPROVED   │
-                                              execute (anchored) → open escrow │
-                                                                    ▼
-                                                             ┌──────────────┐
-                                                             │   EXECUTED   │  escrow held
-                                                             └──────┬───────┘
-                                  completion asserted (either party) │
-                                                                    ▼
-                                                          ── enters optimistic
-                                                             window → Pillar III
-                                                       (assert → finalize | dispute)
+States:  DRAFT · PROPOSED · ACCEPTED · APPROVED · EXECUTED · TERMINATED   (+ Pillar III window)
+
+DRAFT      ──offer / counter_offer (n rounds)──────────────────────────► PROPOSED
+PROPOSED   ──accept (every party, same head hash)──────────────────────► ACCEPTED
+any state  ──terminate (before binding acceptance)─────────────────────► TERMINATED
+
+From ACCEPTED, exactly one branch applies:
+  • Memorandum (no escrow, no acceptance_criteria) ─────────────────────► ACCEPTED is terminal
+  • all committing actions BELOW escalation_threshold:
+        ──execute (anchored, opens escrow)───────────────────────────────► EXECUTED
+  • any committing action AT/ABOVE escalation_threshold:
+        ──approve (Principal)──► APPROVED ──execute (anchored)──► open escrow ► EXECUTED
+
+EXECUTED   ──assert (completion | non-performance, either party)────────► optimistic window → Pillar III
+                                                                          (assert → finalize | dispute)
 ```
 
 **Transition rules (normative):**
@@ -464,7 +468,7 @@ Note how `acceptance_criteria` can reference a required **Attestation** (Pillar 
 **Multi-party scope (C4).** The Thread is a single, linearly hash-chained structure — inherently single-writer-at-a-time. ANP therefore defines two binding patterns and nothing in between:
 - **Bilateral turn-taking** — the 2-party case: alternating `offer`/`counter_offer`, then mutual `accept`.
 - **Coordinator-assembled N-party** — for N>2: one Party acts as **coordinator** and assembles the final terms as a single head Object; all other Parties only `accept` that identical head hash (no concurrent counters). This sidesteps fork/ordering ambiguity that free-for-all concurrent counters would create.
-- **Accept-invalidation (normative):** any new `counter_offer` referencing the current head **supersedes** it and **invalidates all prior `accept`s** on now-superseded heads (their anchors move to `superseded`). A set of `accept`s is binding only if every one references the *current* head. Concurrent forks (two Objects sharing a `previous_hash`) are resolved by anchor ordering: the first-anchored is the head, the other is `superseded`. Free concurrent multi-party negotiation is explicitly **out of scope** for binding Threads in v0.2.
+- **Accept-invalidation (normative).** A set of `accept`s is binding only if every one references the *current* head. Any new `counter_offer` referencing the current head **supersedes** it and thereby invalidates all prior `accept`s on the now-superseded head. **Supersession is derived off-chain** from head ordering — a Verifier replays the Thread and treats accepts on a non-current head as void; **no party's prior `accept` anchor needs to be mutated** (which avoids the §6.5 problem of who may change another signer's anchor status). A profile MAY *additionally* mark `superseded` on-chain, but only the coordinator/contract authority defined for the Thread may do so, and it is never required for correctness. Concurrent forks (two Objects sharing a `previous_hash`) are resolved by anchor ordering: the first-anchored is the head. Free concurrent multi-party negotiation is explicitly **out of scope** for binding Threads in v0.2.
 
 ### 7.5 Anti-hallucination / determinism properties
 
@@ -503,8 +507,8 @@ An Attestation is an ANP Object of `type: attest` whose `body` is (or wraps) a V
       "method": "calibrated-sensor-XYZ#serial123"
     },
     "evidence": [
-      { "kind": "c2pa", "hash": "sha384:…", "locator": "ipfs://…" },   // signed media/sensor capture
-      { "kind": "document", "hash": "sha384:…" }
+      { "kind": "c2pa", "hash": "sha3-384:…", "locator": "ipfs://…" },   // signed media/sensor capture
+      { "kind": "document", "hash": "sha3-384:…" }
     ],
     "confidence": { "model": "interval", "lower": "4.1", "upper": "4.3" },
     "validity": { "not_before": "…", "expires": "…" },
@@ -522,17 +526,20 @@ For higher assurance, an Attestation MAY require an **M-of-N witness quorum**. T
 
 ```jsonc
 "quorum": {
-  "witness_pool": "urn:anp:trustlist:metrology-witnesses",  // named trust list of eligible Witnesses
-  "n": 3,                       // size of the eligible/invited set
-  "m": 2,                       // concurrences required (m ≥ 1; m=1 is NOT a quorum, it is a single attestation)
-  "witness_window": "PT2H"      // witnesses must respond within this window
+  "witness_pool": "urn:anp:trustlist:metrology-witnesses",   // named trust list of eligible Witnesses
+  "selection": "explicit",                                   // explicit | vrf
+  "witness_set": ["did:iota:w1","did:iota:w2","did:iota:w3"],// the N invited, distinct DIDs (explicit selection)
+  "n": 3,                       // size of the invited set (= |witness_set|)
+  "m": 2,                       // concurrences required (m ≥ 1; m=1 is NOT a quorum, just a single attestation)
+  "witness_window": "PT2H"      // measured from the Attestation's anchor timestamp
 }
 ```
 
 Normative rules:
-- Each Witness **MUST** be a member of `witness_pool` and **MUST** add an **independent, separately-anchored `witness` Object** referencing the (already-anchored) Attestation hash. The single-object multi-signature form is **not** used for quorum, since independent signers cannot co-sign one canonicalized Object without a defined aggregation scheme.
-- A `witness` Object carries a verdict `{concur | dissent}` with an optional reason hash. The Attestation reaches `WITNESSED` when **M concur** within `witness_window`.
-- **Dissent and timeout:** if fewer than M concur before the window closes (whether through dissent or silence), the quorum **fails**; the Attestation remains `ANCHORED` but unwitnessed and **MUST NOT** satisfy an `acceptance_criteria` that required the quorum. Dissents are part of the permanent record.
+- The **invited set of N must be verifiable**, so the requester cannot cherry-pick after the fact. Either (a) `selection: "explicit"` lists `witness_set` — N **distinct** DIDs, each a member of `witness_pool`; or (b) `selection: "vrf"` derives the N deterministically from `witness_pool` via a verifiable random function seeded by the Attestation hash. A Verifier **MUST** reject a quorum whose participating witnesses are not exactly drawn from this verifiable set.
+- Each Witness **MUST** add an **independent, separately-anchored `witness` Object** referencing the (already-anchored) Attestation hash. **One vote per DID** — duplicate votes from the same DID count once. The single-object multi-signature form is **not** used for quorum (independent signers cannot co-sign one canonicalized Object without a defined aggregation scheme).
+- A `witness` Object carries a verdict `{concur | dissent}` with an optional reason hash. The `witness_window` **starts at the Attestation's anchor timestamp**; the Attestation reaches `WITNESSED` when **M of the N** concur within it.
+- **Dissent and timeout:** silence from an invited witness counts as **non-concurrence**. If fewer than M concur before the window closes (through dissent or silence), the quorum **fails**; the Attestation remains `ANCHORED` but unwitnessed and **MUST NOT** satisfy an `acceptance_criteria` that required the quorum. Dissents are part of the permanent record.
 
 ### 8.4 "Attested-as-reported" vs. "true"
 
@@ -551,7 +558,17 @@ When the notarized subject is media or sensor output, the `evidence` entry **SHO
 ### 8.6 Revocation
 
 - **Off-chain (default, cheap):** the Attestation references a **W3C Bitstring Status List** entry; the issuer flips one bit to revoke/suspend. One status credential covers ≥131,072 attestations — marginal cost per revocation is negligible and privacy-preserving ("herd privacy").
-- **On-chain (when trustless contract checks are needed):** the anchor `status` is set to `revoked`. This costs a transaction per revocation and therefore does **not** scale for mass revocation — use it only for the small set of attestations a smart contract must check trustlessly.
+- **On-chain (when trustless contract checks are needed):** a **`revoke` Object** is anchored, which sets the target attestation's anchor `status` to `revoked`. This costs a transaction per revocation and therefore does **not** scale for mass revocation — use it only for the small set of attestations a smart contract must check trustlessly.
+
+The **`revoke` Object** (type `revoke`, §6.1) has a `body` of:
+
+```jsonc
+{ "revokes": "sha3-384:…",        // hash of the target attestation
+  "reason_hash": "sha3-384:…",    // optional: hash of an off-chain reason statement
+  "status_list_update": true }    // whether the off-chain Bitstring Status List was also updated
+```
+
+It **MUST** be signed by the **original issuer** of the target attestation (or an authority the contract designates), satisfying the §6.5 rule that status mutation is gated on a valid signature from the entitled DID. On-chain revocation and the off-chain status list are complementary: the status list is the cheap default for credential holders; the on-chain `revoke` is for attestations a smart contract must check without trusting an off-chain endpoint.
 
 ### 8.7 State machine
 
@@ -574,7 +591,7 @@ When parties disagree about whether terms were met, resolve it through a forum t
 
 ### 9.2 The arbitration clause
 
-Disputes are only fair if the forum is fixed *before* the conflict. A contract's `terms.dispute` (see §7.3) **MUST**, when present, specify: the `arbiter` (or a selection rule/panel), a `process_profile`, a `challenge_window`, escrow handling, and appeal availability. Absent a clause, ANP provides no on-chain enforcement path — only the anchored evidence trail.
+Disputes are only fair if the forum is fixed *before* the conflict. A contract's `terms.dispute` (see §7.3) **MUST**, when present, specify: the `arbiter` (or a selection rule/panel), a `process_profile`, a `challenge_window`, escrow handling, and appeal availability — `appeal.allowed`, **plus `appeal.appeal_window` whenever `appeal.allowed = true`** (its omission when appeals are enabled makes the `RULED → FINALIZED` transition ambiguous and **MUST** be rejected). When `appeal.allowed = false`, a Ruling is final on issuance. Absent a clause, ANP provides no on-chain enforcement path — only the anchored evidence trail.
 
 **Neutral selection (to avoid re-creating the single-evaluator weakness).** A single pre-named arbiter is just a single evaluator agreed in advance; if one side insists on a captured arbiter, neutrality is lost. The default `process_profile` therefore offers — and above a value threshold **SHOULD** mandate — one of two neutral-selection mechanisms instead of a fixed `arbiter`:
 - **VRF draw from a bonded pool:** the arbiter is selected pseudo-randomly (verifiable random function) from a named, bonded pool at dispute time, so neither party chooses it.
@@ -611,11 +628,11 @@ RULED ──appeal (once) ──► APPEALED ──panel rule (final)──► F
 FINALIZED ──enforce──► settled
 ```
 
-- **Assert-and-wait.** An `assert` stands and auto-finalizes if no `dispute` is filed within `challenge_window`. This keeps the happy path cheap and fast.
-- **Non-performance is covered (M5).** The silent non-performer is the canonical agent failure (lost memory, hallucination). If no completion `assert` is anchored by `terms.deadline + grace`, the counterparty MAY anchor a **non-performance `assert`** (or, where the contract allows, trigger automatic refund). Either side can start the clock; a frozen `EXECUTED` Thread cannot strand escrow indefinitely.
+- **Assert-and-wait.** An `assert` stands and auto-finalizes if no `dispute` is filed within `challenge_window`. This keeps the happy path cheap and fast. On finalization the **asserting party** anchors an `enforce` with `basis: "uncontested_assertion"` (§6.2.1) — **no arbiter is involved**; the escrow contract checks only that the window elapsed with no `dispute` and that the directive matches the asserted outcome.
+- **Non-performance is covered (M5).** The silent non-performer is the canonical agent failure (lost memory, hallucination). If no completion `assert` is anchored by `terms.deadline + grace`, the counterparty MAY anchor a **non-performance `assert`**. Like any assert it runs the `challenge_window` and then settles via `enforce` — an undisputed non-performance assert yields a refund (`basis: "uncontested_assertion"`), keeping the single settlement path of §7.4/§10.1. Either side can start the clock; a frozen `EXECUTED` Thread cannot strand escrow indefinitely.
 - **Challenge → evidence → ruling.** A `dispute` opens the evidence phase; the Arbiter (or panel, §9.2) issues a `rule`. Both challenger and defendant **SHOULD** post a bond; the losing side's bond funds arbiter fees and deters frivolous disputes (shortfall handling in §10.3).
 - **Appeal — exactly once (m7).** If `appeal.allowed`, a Ruling MAY be escalated **once** to the final panel within `appeal_window`; the panel's ruling is final. Deeper multi-tier appeals are a separate, non-default profile.
-- **Enforcement — verifiable, not cooperation-free (C1).** `enforce` anchors the numeric settlement directive (§6.2.1) signed by the entitled Arbiter/panel; the escrow contract acts on it. Enforcement is **automatic and verifiable given a valid arbiter signature and posted bond** — it does *not* require the *losing* party's cooperation, but it *does* rest on the (bonded, pre-agreed) Arbiter's honesty and the chain account's security. ANP makes that residual trust explicit, bonded, and auditable rather than eliminating it.
+- **Enforcement — verifiable, not cooperation-free (C1).** `enforce` anchors the numeric settlement directive (§6.2.1); the escrow contract acts on it. The **required signer is determined by `outcome.basis`**: the entitled Arbiter/panel for `basis: "ruling"`, or the asserting party for `basis: "uncontested_assertion"` (where the contract instead checks that the challenge window elapsed undisputed). Enforcement is **automatic and verifiable given the appropriate valid signature, a posted bond, and an expired challenge window** — it does *not* require the *losing* party's cooperation, but it *does* rest on the chain account's security and, in the challenged path, the (bonded, pre-agreed) Arbiter's honesty. ANP makes that residual trust explicit, bonded, and auditable rather than eliminating it.
 
 ### 9.5 Differentiation
 
@@ -780,7 +797,7 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 **Phase 1 — This document (now).** Publish the v0.2 concept/draft spec; gather feedback; refine.
 
 **Phase 2 — Proof of Concept (per pillar).**
-- *Contracting:* two agents negotiate a structured service agreement; Objects anchored on IOTA testnet; mandate-gated approval; escrow auto-release on accepted criteria.
+- *Contracting:* two agents negotiate a structured service agreement; Objects anchored on IOTA testnet; mandate-gated approval; settlement via a completion `assert` backed by accepted criteria, then an uncontested `enforce`.
 - *Notarization:* a notary/oracle issues and anchors an attestation (with a C2PA-backed measurement); a contract consumes it as an acceptance criterion.
 - *Dispute:* an optimistic challenge → arbiter ruling → on-chain enforcement, with bonded parties.
 - Open-source from day one; reproducible demo.
@@ -797,11 +814,11 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 
 Normative JSON Schemas (to be finalized in v1.0) will cover:
 
-- the **Object envelope** (§6.1), including `signers[].authority` (mandate | accreditation) and the `proof[]`↔`signers[]` correspondence;
-- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `dispute`), Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}` and the `witnessing` flag, Pillar III `evidence`/`rule`;
+- the **Object envelope** (§6.1) — the full `type` enum (incl. `memorandum`, `assert`, `revoke`, and the non-anchored `receipt`), `signers[].authority` (mandate | accreditation), and the `proof[]`↔`signers[]` correspondence;
+- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `dispute` with `appeal.appeal_window`) and the `assert` body (completion | non-performance, contract-head ref, claimed outcome, evidence anchors); Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}`, the `witnessing` flag, and the `revoke` body `{revokes, reason_hash, status_list_update}`; Pillar III `evidence`/`rule`;
 - the **Mandate** VC (§5.3) incl. `constraints.fx_ref` and per-`scope` caps;
-- the **quorum** object (§8.3) `{witness_pool, n, m, witness_window}`;
-- the **Anchor record** (§6.2) and the **ruling outcome directive** (§6.2.1) `{escrow_id, release_bps, refund_bps, penalty_bps, fee_source, ruling_anchor}`;
+- the **quorum** object (§8.3) `{witness_pool, selection, witness_set, n, m, witness_window}`;
+- the **Anchor record** (§6.2) `{object_hash, object_type, thread_ref, status, anchored_by, timestamp, locator, outcome}` and the **outcome directive** (§6.2.1) `{escrow_id, basis, release_bps, refund_bps, penalty_bps, fee_source, basis_anchor}`;
 - the **suite registry** (§6.5) mapping suite IDs → permitted `alg` set + tagged hash.
 
 All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization for hashing: JCS (RFC 8785); digests are algorithm-tagged (§6.5).
@@ -814,7 +831,7 @@ These trace the four motivating use cases through the state machines to validate
 Buyer-agent `offer` → Seller-agent `counter_offer` (price/delivery) → Buyer-agent `accept`. Value exceeds both mandates' `escalation_threshold` → each Principal adds an `approve`. `execute` (anchored) opens escrow in EURe. Delivery is notarized (B.3-style attestation). The seller anchors a completion `assert` backed by that attestation; with no `dispute` in the `challenge_window`, the Thread `FINALIZED`s and `enforce` settles escrow. Had the seller gone silent past `deadline + grace`, the buyer would anchor a non-performance `assert` and reclaim escrow. Memory loss anywhere is irrelevant — state is reconstructable from anchors + recoverable Objects.
 
 **B.2 API-definition agreement (low-value, high-frequency Contracting).**
-Two agents `offer`/`accept` a structured API contract (endpoints, types, versioning, deprecation date). Below threshold → fully autonomous, no human, no escrow needed (Notarization-only is also valid). Cost ≈ one anchor. This is the case that only works because per-determination cost is near zero.
+Two agents co-sign a single `memorandum` Object (the API contract: endpoints, types, versioning, deprecation date) — `terms.escrow.required = false`, no `acceptance_criteria`. Below threshold → fully autonomous, no human, no escrow. It is anchored **once** (one anchor) and is terminal at `ACCEPTED`. This is the case that only works because per-determination cost is near zero.
 
 **B.3 Measurement notarization (Pillar II standalone).**
 An accredited oracle samples tank-7 temperature, captures a C2PA-signed sensor reading, issues an `attest` (with confidence interval), optionally collects a 2-of-3 witness quorum, and anchors it. Anyone can later verify "oracle O reported 4.2 °C at 11:58, accredited by issuer I, bonded." A consumer treats it as attested-as-reported, not absolute truth.
