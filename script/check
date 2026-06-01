@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 fail=0
 
 echo "== required files =="
-required=(README.md concept-paper.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md AGENTS.md)
+required=(README.md SPEC.md LICENSE CONTRIBUTING.md CODE_OF_CONDUCT.md AGENTS.md)
 for f in "${required[@]}"; do
   if [ -f "$f" ]; then
     echo "  ok: $f"

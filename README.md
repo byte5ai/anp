@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Status: Draft](https://img.shields.io/badge/status-draft%20concept-orange.svg)](#status)
-[![Spec: v0.2](https://img.shields.io/badge/spec-v0.2-informational.svg)](./concept-paper.md)
+[![Spec: v0.2](https://img.shields.io/badge/spec-v0.2-informational.svg)](./SPEC.md)
 
 **An open, DLT-neutral trust layer for agent-to-agent agreements, notarization, and dispute resolution.**
 
@@ -10,7 +10,7 @@ AI agents increasingly act on behalf of people and organizations — and, increa
 
 ANP fills exactly that gap.
 
-> **📄 The full specification lives in [`concept-paper.md`](./concept-paper.md).** This README is the short version.
+> **📄 The full specification lives in [`SPEC.md`](./SPEC.md).** This README is the short version.
 
 ---
 
@@ -78,9 +78,9 @@ The spec is chain-agnostic. The **reference profile** targets **IOTA Rebased** (
 
 ## Status
 
-**v0.2 — Draft / Concept.** This is a design specification, stable enough to implement against, with unresolved questions explicitly marked ([§16 Open Questions](./concept-paper.md#16-open-questions)). It is **not** a final standard. Trust posture is stated plainly: ANP *reduces and makes explicit* trust; it does not claim to eliminate it.
+**v0.2 — Draft / Concept.** This is a design specification, stable enough to implement against, with unresolved questions explicitly marked ([§16 Open Questions](./SPEC.md#16-open-questions)). It is **not** a final standard. Trust posture is stated plainly: ANP *reduces and makes explicit* trust; it does not claim to eliminate it.
 
-Roadmap: concept (now) → proof-of-concept per pillar → spec v1.0 → community & ecosystem. See [§17](./concept-paper.md#17-roadmap).
+Roadmap: concept (now) → proof-of-concept per pillar → spec v1.0 → community & ecosystem. See [§17](./SPEC.md#17-roadmap).
 
 ## Contributing
 

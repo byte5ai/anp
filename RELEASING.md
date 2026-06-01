@@ -5,14 +5,14 @@ ANP is a **specification**, not a software package — so "releasing" means publ
 ## Versioning
 
 - The spec version lives in two places that **must agree**:
-  - `concept-paper.md` front matter (`v0.X`)
+  - `SPEC.md` front matter (`v0.X`)
   - `README.md` status badge (`spec-v0.X`)
 - Use `vMAJOR.MINOR` (e.g. `v0.2`). Pre-release drafts may use `v0.3-draft`.
 
 ## Process (only on explicit human instruction)
 
 1. Open a `release/vX.Y` branch.
-2. Bump the version in `concept-paper.md` and `README.md`; update the changelog section / `Appendix C` (changes).
+2. Bump the version in `SPEC.md` and `README.md`; update the changelog section / `Appendix C` (changes).
 3. Ensure `docs-check` passes.
 4. Open a PR, get it reviewed, merge to `main`.
 5. Tag the merge commit:
