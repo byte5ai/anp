@@ -92,4 +92,4 @@ ANP is open infrastructure and feedback is welcome — see [`CONTRIBUTING.md`](.
 
 ---
 
-*Authored by byte5 ([byte5.ai](https://byte5.ai)). Contact: `cw@byte5.de`.*
+*Authored by byte5 ([byte5.ai](https://byte5.ai)). Contact: `info@byte5.de`.*
