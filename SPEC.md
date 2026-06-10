@@ -270,7 +270,7 @@ A Mandate **MUST** specify at least:
 
 Notaries, Oracles, and Arbiters occupy exposed positions, so their trust is established explicitly:
 
-- **Accreditation.** A third party's authority is a Role VC from an accreditation issuer. Relying parties decide which issuers they trust via **Trust Lists** (an out-of-band, governable set of trusted issuer DIDs). ANP does not centralize this; it standardizes the *format* and *resolution* of trust lists, not their contents.
+- **Accreditation.** A third party's authority is a Role VC from an accreditation issuer. Relying parties decide which issuers they trust via **Trust Lists** (an out-of-band, governable set of trusted issuer DIDs). ANP does not centralize this; it standardizes the *format* and *resolution* of trust lists, not their contents. A trust list is a **versioned, hash-identified artifact**: any binding reference to one **MUST** pin its content hash (`{id, hash}`, §7.3), so the governing snapshot is fixed at contract time and later list edits cannot retroactively change which issuers count.
 - **Reputation.** ANP defines a DLT-neutral **reputation interface** (record/fetch signed feedback referencing a Thread), modeled on the ERC-8004 reputation registry but expressed abstractly so any chain can implement it. Heavy data stays off-chain; only signed pointers/hashes are anchored.
 - **Bonding & slashing.** A third party **MAY** be required to post a bond (stake) as a precondition to act in a Thread. Misbehavior proven by a Ruling **MAY** slash the bond. This makes "attested-as-reported vs. actually-true" economically meaningful (see §8.4) and deters frivolous or malicious arbitration. Bond *custody* and *slash distribution* are defined in the settlement interface (§10.3).
 - **The trust root is terminal and named (M7).** Bonding cannot recurse forever: someone adjudicates the adjudicators. ANP makes this explicit — the **final appeal tier** (a designated Arbiter or M-of-N panel) is **unappealable** and is the Thread's terminal trust anchor. Relying parties accept a Thread *only* if they accept its named final tier (chosen at contract time, §7.3 / §9.2). Honesty over false decentralization: ANP minimizes and bonds trust along the chain, but every Thread rests on a terminal forum the parties agreed to trust.
@@ -461,8 +461,9 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
   "price": { "amount": "0.50", "currency": "EURe", "settlement_profile": "iota" },
   "deadline": "2026-05-29T13:00:00Z",
   "acceptance_criteria": [
-    { "kind": "attestation", "schema": "translation-quality-v1",
-      "issuer_trust_list": "urn:anp:trustlist:quality-notaries" }
+    { "kind": "attestation",
+      "schema":            { "id": "translation-quality-v1",                "hash": "sha3-384:…" },
+      "issuer_trust_list": { "id": "urn:anp:trustlist:quality-notaries",   "hash": "sha3-384:…" } }
   ],
   "penalty": { "late_delivery": "10%", "non_delivery": "100%" },
   "escrow": { "required": true, "amount": "0.50", "currency": "EURe" },
@@ -473,13 +474,16 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
     "evidence_window": "PT48H",          // evidence phase ends this long after the dispute anchor (§9.4)
     "ruling_deadline": "PT72H",          // arbiter must rule this long after the evidence window closes (§9.4)
     "bond": { "bps_of_escrow": 1000, "floor": "arbiter_fee_schedule" },   // asserter & challenger bond sizing (§9.4)
-    "appeal": { "allowed": true, "panel": "urn:anp:panel:tier2", "appeal_window": "PT48H" }
+    "appeal": { "allowed": true, "appeal_window": "PT48H",
+                "panel": { "id": "urn:anp:panel:tier2", "hash": "sha3-384:…" } }
   },
   "governing_suite": "anp-suite-2"
 }
 ```
 
 Note how `acceptance_criteria` can reference a required **Attestation** (Pillar II) and `dispute` embeds the **arbitration clause** (Pillar III) — the pillars compose.
+
+**Pinned references (normative).** Binding semantics MUST NOT hang off mutable, name-based references — whoever controls a registry or list could otherwise change what an already-accepted contract *means* (which attestations satisfy it, which issuers count): the same TOCTOU class §5.3 closes for mandate status. Therefore, every schema and trust-list reference in a binding context (`acceptance_criteria.schema`, `issuer_trust_list`, witness pools §8.3, arbiter pools/panels §9.2) **MUST** be a content-addressed `{id, hash}` pair; the hash is the tagged digest (§6.5) of the referenced artifact's canonical content. **The governing snapshot is the one whose hash is pinned in the accepted head** — later registry or list updates affect only later contracts. A Verifier **MUST** resolve the artifact, recompute its hash, and reject the criterion (not silently substitute a newer version) on mismatch.
 
 **Milestones (optional).** Real service and supply relationships are staged; single-shot escrow forces one Thread per milestone and loses the contractual whole. `terms` MAY therefore declare:
 
@@ -591,7 +595,7 @@ For higher assurance, an Attestation MAY require an **M-of-N witness quorum**. T
 
 ```jsonc
 "quorum": {
-  "witness_pool": "urn:anp:trustlist:metrology-witnesses",   // named trust list of eligible Witnesses
+  "witness_pool": { "id": "urn:anp:trustlist:metrology-witnesses", "hash": "sha3-384:…" },   // pinned trust list (§7.3) of eligible Witnesses
   "selection": "explicit",                                   // explicit | vrf
   "witness_set": ["did:iota:w1","did:iota:w2","did:iota:w3"],// the N invited, distinct DIDs (explicit selection)
   "n": 3,                       // size of the invited set (= |witness_set|)
@@ -768,6 +772,7 @@ ANP uses the **Settlement Layer's native asset and/or stablecoins**. Native **EU
 | **Arbiter stalling / stranded escrow** | `evidence_window` + `ruling_deadline` are REQUIRED (§9.2/§9.4); timeout → fee/bond forfeiture and VRF replacement or escalation; appeal-tier timeout → first-instance ruling final. |
 | **Mandate-chain abuse / DoS** | Bounded `max_depth`, caching, signature-verification limits per Thread. |
 | **Retroactive mandate revocation / status-list rollback** | Anchor-time evaluation of authority; revocation is ex nunc only; Verifiers retain the signed, dated status-list credential as evidence; RECOMMENDED periodic status-list snapshot anchors (§5.3). |
+| **Mutable schema / trust-list references (semantic TOCTOU)** | All binding references are content-addressed `{id, hash}` pairs pinned in the accepted head (§7.3/§5.4); schema & suite registries are versioned, hash-identified artifacts selected by `anp_version` (Appendix A); Verifiers reject hash mismatches. |
 | **Quantum adversary (binding layer & semantic state)** | PQC-capable suites (ML-DSA/SLH-DSA), SHA-384/SHA3-384 anchors; anchor `status` mutations are void without a PQC-signed Object — enforced by Verifiers off-chain, and on-chain via native PQC verification or optimistic status enforcement where the profile provides it (§6.5) — so a forged chain key cannot rewrite *meaning*. |
 | **Quantum adversary (settlement & tx submission)** | *Open risk*: escrow custody and the ability to submit transactions inherit chain-native account crypto (Ed25519/secp256k1, not PQC). Bound amounts/time windows; prefer chains with a PQC account roadmap (§16). |
 | **Data unavailability / anchor-and-withhold** | Core MUST: deliver Object + signed receipts to counterparties **or** place in a DA layer (§6.4); an anchor whose Object cannot be produced is **void** in dispute and triggers no settlement. |
@@ -910,6 +915,8 @@ Normative JSON Schemas (to be finalized in v1.0) will cover:
 
 All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization: JCS (RFC 8785); the signature input is the proof-less **signing form**, and the anchored `object_hash` covers the assembled `proof[]` (§6.3); digests are algorithm-tagged (§6.5).
 
+**Registry pinning (normative).** "Registered for `type`" never means a mutable endpoint. The per-version **schema registry** (envelope + all `body` schemas) and the **suite registry** (§6.5) are published as **versioned, content-addressed artifacts** — one hash per `anp_version`, published with the spec release (annotated tag). `anp_version` selects the registry artifact; Verifiers **MUST** validate against the pinned artifact and **MUST** treat a registry whose content does not match its published hash as invalid. There is no central live registry to capture: anyone can mirror the artifacts, and the hash decides. Contract-level references (`acceptance_criteria.schema`, trust lists) are additionally pinned per Thread (§7.3/§5.4).
+
 ### Appendix B: Scenario walkthroughs
 
 These trace the four motivating use cases through the state machines to validate completeness.
@@ -941,6 +948,7 @@ Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` w
 - **Mandatory asserter/challenger bonds (§6.2.1, §7.3, §9.4, §11; review issue #12):** for escrow-bearing Threads the asserter bond (at `assert`) and challenger bond (at `dispute`) are **MUST**s with a `terms.dispute.bond` sizing rule (bps of escrow, floor = arbiter fee schedule); §6.2.1's precondition list is reconciled accordingly; a successfully challenged false assertion forfeits the asserter's bond.
 - **Mutual settlement fast path (§6.2.1, §7.4, §9.3, §9.4, §10.1; review issue #14):** new co-signed `settle` Object — all challenge-entitled parties waive the remaining challenge window by unanimous consent and authorize immediate `enforce` with the new `basis: "mutual_settlement"`; the escrow contract verifies per-account assent via the §10.1 party bindings (`escrow.approve_settlement`). M1's single-release-path semantics are preserved: the waiver is the optimistic path minus a window that everyone it protects has waived.
 - **Amendment & mutual rescission (§7.2, §7.4, §10.1; review issue #15):** new co-signed `amend` (replacement terms become the new head; mandate checks re-run; escrow adjusted via `escrow.adjust` before the amendment is effective) and `rescind` (terminal `RESCINDED` state; agreed split settles via `basis: "mutual_settlement"`). Unilateral termination after binding acceptance remains impossible.
+- **Hash-pinned schemas & trust lists (§5.4, §7.3, §11, Appendix A; review issue #16):** every schema and trust-list reference in a binding context is now a content-addressed `{id, hash}` pair; the snapshot pinned in the accepted head governs the Thread, so registry/list edits cannot retroactively change contract semantics. The per-version schema registry and the suite registry are published as versioned, hash-identified artifacts selected by `anp_version` — no central live registry to capture.
 - **Milestones / partial performance (§6.2.1, §7.3, §7.4, §9.3, §9.4, §10.1; review issue #22):** optional `terms.milestones[]` (amounts summing to `escrow.amount`, per-milestone deadlines/criteria/window overrides); `assert`/`settle` MAY be milestone-scoped; an uncontested or mutually settled milestone triggers a partial, tranche-scoped `enforce` (`outcome.milestone`) while the Thread stays `EXECUTED`; milestone-scoped disputes freeze only their tranche.
 - **Authorized-writer rule (§6.1, §6.2.1, §9.3, §9.4, §10.1, §11; review issue #13):** Thread state derivation considers only schema-valid, available Objects signed by authorized Thread participants — outsider anchors with a copied `thread_ref` are ignored; a `dispute` is valid only from a Thread party (or mandated Agent), verified on-chain via party→chain-account bindings recorded at `escrow.open`. Closes the dispute-freeze-griefing and thread-pollution vectors.
 
