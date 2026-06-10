@@ -240,7 +240,7 @@ A Mandate **MUST** specify at least:
     "allowed_counterparties": ["did:iota:…", "*"],
     "allowed_actions": ["offer", "counter_offer", "accept", "attest"],
     "escalation_threshold": { "amount": "1000", "currency": "EUR" }, // at or above → Principal co-sign
-    "fx_ref": "ECB-EUR-daily"   // conditionally required: when an agreement prices in another asset (EURe→EUR)
+    "fx_ref": "ECB-EUR-daily"   // conditionally required: when an agreement prices in another asset (USDC.e→EUR)
   },
   "sub_delegation": { "allowed": false, "max_depth": 0 },
   "not_before": "2026-05-01T00:00:00Z",
@@ -262,7 +262,7 @@ A Mandate **MUST** specify at least:
 - **Revocation is ex nunc.** A revocation invalidates only Objects anchored **after** the revocation is published (status-list update) or anchored (an on-chain `revoke`, §8.6). It **MUST NOT** be honored retroactively against Objects anchored while the Mandate was unrevoked.
 - **Point-in-time provability.** The status-list endpoint alone cannot prove what it said at time *T*. A Verifier **MUST** retain the fetched **status-list credential** (itself a signed, dated VC, §8.6) for every authority check it may later need to defend; in a dispute, a retained status-list credential dated *T* prevails over any later list state for Objects anchored at *T*. Principals/issuers **SHOULD** additionally anchor **periodic status-list snapshots** (the hash of the status credential) so that list state at any anchor-ordered moment is provable against the ledger by anyone.
 
-- **Per-action value** (`max_value`, `escalation_threshold`) is fully checkable by a counterparty's Verifier: the action's value and the mandate cap are both present, and value **MUST** be expressed in the mandate's currency using a declared FX reference (`constraints.fx_ref`) when the agreement prices in another asset (e.g., `EURe`→`EUR`).
+- **Per-action value** (`max_value`, `escalation_threshold`) is fully checkable by a counterparty's Verifier: the action's value and the mandate cap are both present, and value **MUST** be expressed in the mandate's currency using a declared FX reference (`constraints.fx_ref`) when the agreement prices in another asset (e.g., `USDC.e`→`EUR`).
 - **Aggregate value** (`aggregate_value` over a window) is **not** enforceable by a counterparty, because an agent's other Threads are private and not globally discoverable. It is enforceable only by (a) the **Principal's own accounting** (replaying the agent's anchored Threads) or (b) a designated **mandate-state oracle** the Principal trusts. The spec states this limitation rather than pretending counterparties can police aggregates; the **per-action** cap is the counterparty-checkable guarantee.
 - **Non-Contracting actions need a value mapping.** Notarization and dispute actions have no price. For threshold purposes their "value" is defined per scope: a notarization's value is its posted bond/fee; a dispute action inherits the disputed Thread's escrow value. Mandates **MAY** set separate caps per `scope` so escalation cannot be silently bypassed by routing through Pillar II/III.
 
@@ -458,7 +458,7 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
   "parties": ["did:iota:buyerAgent", "did:iota:sellerAgent"],
   "input_spec":  { "format": "text/plain", "lang": "en", "max_tokens": 5000 },
   "output_spec": { "format": "text/plain", "lang": "de", "quality": "professional" },
-  "price": { "amount": "0.50", "currency": "EURe", "settlement_profile": "iota" },
+  "price": { "amount": "0.50", "currency": "USDC.e", "settlement_profile": "iota" },   // bridged USDC on IOTA L1; no EUR stablecoin exists there (§13.2)
   "deadline": "2026-05-29T13:00:00Z",
   "acceptance_criteria": [
     { "kind": "attestation",
@@ -466,7 +466,7 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
       "issuer_trust_list": { "id": "urn:anp:trustlist:quality-notaries",   "hash": "sha3-384:…" } }
   ],
   "penalty": { "late_delivery": "10%", "non_delivery": "100%" },
-  "escrow": { "required": true, "amount": "0.50", "currency": "EURe" },
+  "escrow": { "required": true, "amount": "0.50", "currency": "USDC.e" },
   "dispute": {
     "arbiter": "did:iota:arbiterX",
     "process_profile": "urn:anp:dispute:optimistic-v1",
@@ -808,18 +808,24 @@ A Settlement Layer **MUST** provide:
 
 A Settlement Layer **SHOULD** additionally provide: very low/fixed fees; high throughput for concurrent Threads; a **verifiable post-anchor randomness source** (REQUIRED if the profile supports VRF-based witness/arbiter selection, §8.3/§9.2); and — desirably — **native EUR/USD stablecoins**.
 
+**Hash-capability declaration (normative).** Profiles **MUST** declare which hash operations the chain supports natively: **storing/comparing** tagged digests (always sufficient for anchors and `basis_anchor` matching) versus **on-chain recomputation**. Where the suite hash (§6.5) exceeds the chain's native hash width, the profile **MUST** name the hash used for any in-contract recomputation (e.g., a 256-bit native) **or** route such verification off-chain into the dispute path. The suite registry records these flags per profile (Appendix A).
+
 ### 13.2 Reference profile — IOTA Rebased
 
-IOTA Rebased (mainnet ~May 2025) is the reference example. Verified properties and honest caveats:
+IOTA Rebased (mainnet ~May 2025) is the reference example. Verified properties and honest caveats (figures verified June 2026; access dates go into the v1.0 bibliography):
 
 - **Move VM, object-centric ledger**, architecturally based on Sui (a modified fork: different tokenomics, validator selection, consensus-robustness tweaks). The object model maps naturally to ANP Threads/anchors as typed on-chain objects.
-- **Mysticeti** DAG-based BFT consensus, **delegated Proof-of-Stake**, **sub-second finality (~<500 ms)**; **50,000+ TPS** is a *capacity/test* figure, not a sustained-mainnet guarantee.
-- **Fees** exist (Rebased **ended** legacy IOTA's feeless model): reference price ≈ **0.005 IOTA per average transaction** (token-denominated, so the fiat value floats — do not quote a fixed USD price). **Sponsored transactions via the IOTA Gas Station** (launched Alpha in 2025 — new, not battle-hardened) let an operator pay fees so agents transact at zero user cost.
+- **Starfish** DAG-based BFT consensus (Mysticeti successor, since protocol v24 / node release v1.21.1, April 2026), **delegated Proof-of-Stake**; measured consensus commit **p99 ≈ 312 ms** (down from ~486 ms under Mysticeti) — genuinely sub-second on mainnet. **50,000+ TPS** remains a *capacity/test* figure; the sustained mainnet average over the first year is ≈ 21 TPS — ample anchoring headroom, and an honest signal of a still-thin general-purpose ecosystem.
+- **Fees** exist (Rebased **ended** legacy IOTA's feeless model) and are lower than v0.2 assumed: a small anchor write costs ≈ **0.001 IOTA burned (~$0.000045)** plus ≈ 0.0015–0.002 IOTA of **fully-refundable** storage deposit (storage rebate rate 100%). Merkle batching (§6.4) is not economically necessary at current prices, but remains available for scale. **Sponsored transactions via the IOTA Gas Station** (self-hosted, v0.5.2, May 2026 — production-usable, still pre-1.0; the IOTA Foundation operates no shared service) let an operator pay fees so agents transact at zero user cost, including zero-balance keypairs.
+- **Native randomness & VRF.** The protocol exposes a **randomness beacon** (`0x2::random::Random` at object `0x8`) and **ECVRF verification** natively — the post-anchor randomness source and grind-resistant VRF draws of §8.3/§9.2 are directly implementable.
+- **On-chain hashing tops out at 256 bits.** Move natives are `sha2_256`, `sha3_256`, `blake2b256`, `keccak256` — **no SHA-384/SHA3-384** (`poseidon`/`vdf` disabled on mainnet). Anchors carry the tagged 384-bit digests (§6.5) as **opaque bytes**: storing and byte-comparing them (e.g. `basis_anchor` matching, §6.2.1) works unchanged, but the chain can never **recompute** a 384-bit hash. Mechanisms requiring on-chain recomputation — commit-reveal openings verified in-contract (§6.6), fraud-proof checks of a revealed Object against its anchor — **MUST** either use the profile's declared 256-bit recomputation hash (`sha3_256`) or move verification off-chain into the dispute path (hash-capability declaration, §13.1).
 - **IOTA EVM** (L2, Solidity) provides EVM interoperability distinct from the Move L1 — a dual-VM story.
 - **PQC status-gate binding (§6.5).** Move on IOTA Rebased has **no ML-DSA/SLH-DSA natives** (framework crypto natives: ed25519, ecdsa_k1/r1, bls12381, groth16, ecvrf, hmac_sha3_256; no PQC natives on any published IIP roadmap) — in-contract PQC verification is not practical today (Groth16-wrapped PQC verification via the zk natives is theoretically possible, not practical). The IOTA profile therefore **MUST** implement **optimistic status enforcement** (§6.5) for the escrow-relevant transitions (`disputed`, `enforced`).
 - **Off-chain PQC is ready on this profile:** IOTA Identity (v1.7+) issues/verifies VCs with **ML-DSA-44/65/87, SLH-DSA, FALCON, and hybrid composites** (e.g. `id-MLDSA65-Ed25519`) — the binding-layer PQC suites of §6.5 are implementable with first-party tooling.
 - **Status lists (§8.6 binding):** IOTA Identity implements **RevocationBitmap2022** and **StatusList2021**, not (yet) the W3C Bitstring Status List; the profile binds these as the equivalent bit-array mechanisms permitted by §8.6 (RevocationBitmap2022: revocation only; StatusList2021: revocation + suspension). Bitstring Status List SHOULD be adopted if/when supported upstream. Note: the library has had **no stable release** as of June 2026 (latest: v1.9.9-beta.1) — APIs may still break; treat it as a pre-GA dependency.
-- **Caveats to disclose:** **IOTA Identity is Alpha** (not production-ready early 2026); chain-native signatures are **Ed25519 (not PQC)** — hence ANP's binding-layer PQC strategy and the settlement-layer open risk (§6.5, §16).
+- **Stablecoins — current reality (§10.2/§16.8):** bridged **USDC.e/USDT** only (LayerZero/Stargate, live Dec 2025); **no EUR stablecoin exists on IOTA L1**; a native stablecoin has been announced and is in formal-verification audit with **no confirmed launch** as of June 2026. EUR-denominated obligations therefore currently settle over a bridged USD asset with an FX reference (`constraints.fx_ref`, §5.3) — or on an EVM-profile chain where EURe/EURC actually live.
+- **Accounts & auth:** chain-native signatures are **Ed25519 (not PQC)** — hence ANP's binding-layer PQC strategy and the settlement-layer open risk (§6.5, §16.1). zkLogin was **removed** on IOTA; **passkey** authentication is live; Move-level account abstraction (IIP-0009) is testnet-only.
+- **Component statuses (June 2026):** IOTA Identity is **Beta** (v1.9.9-beta.1 — W3C VC-DM-2.0-aligned SD-JWT, BBS+ ZK selective disclosure, PQC suites as above; **no stable release yet**); Gas Station is v0.5.2 (pre-1.0). Treat both as pre-GA dependencies.
 
 ### 13.3 EVM interoperability profile (optional)
 
@@ -829,7 +835,7 @@ For deployments wanting alignment with the Ethereum agent stack, an EVM profile 
 
 | Chain | Fit notes |
 |---|---|
-| **Sui** | Shares IOTA Rebased's Move/object/Mysticeti lineage; sub-second finality, sponsored tx. Same family, larger ecosystem. |
+| **Sui** | Shares IOTA Rebased's Move/object lineage (Sui runs Mysticeti v2; IOTA Rebased moved to Starfish); sub-second finality, sponsored tx. Same family, larger ecosystem. |
 | **Hedera** | HCS gives fixed, USD-denominated fees (≈ $0.0008/message since Jan 2026) and a few-second deterministic finality — excellent for predictable anchoring budgeting; more enterprise-governed. **Caveat:** HCS messages are *not readable by smart contracts*, so HCS-only anchoring fails §13.1 requirement 6 — the uncontested enforcement path (§6.2.1) would need a trusted relayer or a parallel contract-state component. |
 | **Aptos** | Move, ~650 ms finality, sub-cent fees; account-based rather than object-centric; smaller agent-standards ecosystem. |
 | **Solana** | Sub-cent fees, high throughput; fee/inclusion variance under congestion. |
@@ -880,7 +886,7 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 5. **Legal recognition.** When (if ever) does an ANP agreement or notarization carry legal weight in a given jurisdiction, and what mapping to eIDAS/qualified-signature regimes is realistic for "accredited" roles?
 6. **Arbiter selection & neutrality.** Mechanisms for selecting genuinely neutral arbiters (random selection from a bonded pool, party-agreed lists, panels) and preventing capture.
 7. **Reputation gaming.** How to make the reputation interface resistant to wash-feedback and sybil inflation without a central referee.
-8. **Stablecoin availability.** Native EUR/USD stablecoins materially expand use cases but are unevenly available across candidate chains; how central should they be to the reference profile?
+8. **Stablecoin availability.** Native EUR/USD stablecoins materially expand use cases but are unevenly available across candidate chains; how central should they be to the reference profile? (Context, June 2026: the reference chain has bridged USD only and no EUR stablecoin, §13.2; **Stellar** is the only chain in the candidate landscape with native EURC, but fails the sub-second finality filter.)
 
 ---
 
@@ -911,7 +917,7 @@ Normative JSON Schemas (to be finalized in v1.0) will cover:
 - the **Mandate** VC (§5.3) incl. `constraints.fx_ref`, per-`scope` caps, and the `status_list` reference;
 - the **quorum** object (§8.3) `{witness_pool, selection, witness_set, n, m, witness_window}`;
 - the **Anchor record** (§6.2) `{object_hash, object_type, thread_ref, status, anchored_by, timestamp, locator, outcome}` and the **outcome directive** (§6.2.1) `{escrow_id, basis, release_bps, refund_bps, penalty_bps, fee_source, milestone, basis_anchor}`;
-- the **suite registry** (§6.5) mapping suite IDs → permitted `alg` set + tagged hash.
+- the **suite registry** (§6.5) mapping suite IDs → permitted `alg` set + tagged hash, plus per-profile **native hash-operation flags** (store/compare vs. on-chain recompute, §13.1).
 
 All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization: JCS (RFC 8785); the signature input is the proof-less **signing form**, and the anchored `object_hash` covers the assembled `proof[]` (§6.3); digests are algorithm-tagged (§6.5).
 
@@ -922,7 +928,7 @@ All `body` instances **MUST** validate against the schema registered for their `
 These trace the four motivating use cases through the state machines to validate completeness.
 
 **B.1 Factory purchase (high-value Contracting + HITL escalation).**
-Buyer-agent `offer` → Seller-agent `counter_offer` (price/delivery) → Buyer-agent `accept`. Value exceeds both mandates' `escalation_threshold` → each Principal adds an `approve`. `execute` (anchored) opens escrow in EURe. Delivery is notarized (B.3-style attestation). The seller anchors a completion `assert` backed by that attestation; with no `dispute` in the `challenge_window`, the Thread `FINALIZED`s and `enforce` settles escrow. (Faster, since the buyer is satisfied: buyer and seller co-sign a `settle`, waiving the window — settlement is immediate, §9.4.) Had the seller gone silent past `deadline + grace`, the buyer would anchor a non-performance `assert` and reclaim escrow. Memory loss anywhere is irrelevant — state is reconstructable from anchors + recoverable Objects.
+Buyer-agent `offer` → Seller-agent `counter_offer` (price/delivery) → Buyer-agent `accept`. Value exceeds both mandates' `escalation_threshold` → each Principal adds an `approve`. `execute` (anchored) opens escrow in USDC.e (bridged — no EUR stablecoin exists on IOTA L1 today, §13.2), with mandate caps checked in EUR via `constraints.fx_ref`. Delivery is notarized (B.3-style attestation). The seller anchors a completion `assert` backed by that attestation; with no `dispute` in the `challenge_window`, the Thread `FINALIZED`s and `enforce` settles escrow. (Faster, since the buyer is satisfied: buyer and seller co-sign a `settle`, waiving the window — settlement is immediate, §9.4.) Had the seller gone silent past `deadline + grace`, the buyer would anchor a non-performance `assert` and reclaim escrow. Memory loss anywhere is irrelevant — state is reconstructable from anchors + recoverable Objects.
 
 **B.2 API-definition agreement (low-value, high-frequency Contracting).**
 Two agents co-sign a single `memorandum` Object (the API contract: endpoints, types, versioning, deprecation date) — `terms.escrow.required = false`, no `acceptance_criteria`. Below threshold → fully autonomous, no human, no escrow. It is anchored **once** (one anchor) and is terminal at `ACCEPTED`. This is the case that only works because per-determination cost is near zero.
@@ -950,6 +956,9 @@ Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` w
 - **Amendment & mutual rescission (§7.2, §7.4, §10.1; review issue #15):** new co-signed `amend` (replacement terms become the new head; mandate checks re-run; escrow adjusted via `escrow.adjust` before the amendment is effective) and `rescind` (terminal `RESCINDED` state; agreed split settles via `basis: "mutual_settlement"`). Unilateral termination after binding acceptance remains impossible.
 - **Hash-pinned schemas & trust lists (§5.4, §7.3, §11, Appendix A; review issue #16):** every schema and trust-list reference in a binding context is now a content-addressed `{id, hash}` pair; the snapshot pinned in the accepted head governs the Thread, so registry/list edits cannot retroactively change contract semantics. The per-version schema registry and the suite registry are published as versioned, hash-identified artifacts selected by `anp_version` — no central live registry to capture.
 - **Milestones / partial performance (§6.2.1, §7.3, §7.4, §9.3, §9.4, §10.1; review issue #22):** optional `terms.milestones[]` (amounts summing to `escrow.amount`, per-milestone deadlines/criteria/window overrides); `assert`/`settle` MAY be milestone-scoped; an uncontested or mutually settled milestone triggers a partial, tranche-scoped `enforce` (`outcome.milestone`) while the Thread stays `EXECUTED`; milestone-scoped disputes freeze only their tranche.
+- **IOTA profile: on-chain hash handling (§13.1, §13.2, Appendix A; review issue #25):** Move has no 384-bit hash natives — anchors carry tagged 384-bit digests as opaque bytes (store/compare works; recomputation does not). New §13.1 **hash-capability declaration**: profiles name a native recomputation hash or route verification into the dispute path; the suite registry records per-profile flags.
+- **Realistic stablecoin denomination (§5.3, §7.3, §13.2, §16.8, B.1; review issue #28):** worked examples re-denominated from EURe (which does not exist on IOTA L1) to bridged USDC.e with `fx_ref`-based EUR caps; §13.2 documents the stablecoin reality (bridged USDC.e/USDT only, native coin unconfirmed); §16.8 notes Stellar as the only native-EURC chain in the landscape.
+- **IOTA reference profile refreshed to June 2026 (§13.2, §13.4, Appendix D; review issue #29):** Starfish consensus (p99 ≈ 312 ms), measured anchor costs (~0.001 IOTA burned + fully-refundable storage deposit), Gas Station v0.5.2 self-hosted, IOTA Identity Beta with PQC VC suites, native randomness beacon + ECVRF (making §8.3/§9.2 VRF selection directly implementable), zkLogin removed / passkeys live / account abstraction testnet-only.
 - **GDPR posture corrected to pseudonymization (§6.2, §12, Appendix D; review issue #17):** dropped the contestable "the residual on-chain hash is not personal data" claim; anchors are treated as **pseudonymized personal data** per EDPB Guidelines 02/2025, with erasure decaying their identifying power; pairwise DIDs upgraded to **MUST** for Threads with identifiable natural persons.
 - **Quantum hash-strength numbers corrected (§6.5; review issue #20):** the anchor-hash requirement now states classical and quantum levels separately (≥384-bit classical pre-image / ≥192-bit classical collision ⇒ ≥192-bit Grover pre-image) — the v0.2 wording made SHA-384/SHA3-384 fail its own stated requirement; the primitives were right, the numbers were not.
 - **Authorized-writer rule (§6.1, §6.2.1, §9.3, §9.4, §10.1, §11; review issue #13):** Thread state derivation considers only schema-valid, available Objects signed by authorized Thread participants — outsider anchors with a copied `thread_ref` are ignored; a `dispute` is valid only from a Thread party (or mandated Agent), verified on-chain via party→chain-account bindings recorded at `escrow.open`. Closes the dispute-freeze-griefing and thread-pollution vectors.
@@ -979,7 +988,7 @@ Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` w
 - **Ethereum Attestation Service (EAS)** (attest.org).
 - **Virtuals Protocol Agent Commerce Protocol (ACP)** (Base).
 - **UMA Optimistic Oracle**.
-- **IOTA Rebased** (mainnet ~May 2025; Mysticeti consensus; Move VM); **IOTA Identity** (Alpha); **IOTA Gas Station** (Alpha); **IOTA EVM** (L2).
+- **IOTA Rebased** (mainnet ~May 2025; **Starfish** consensus since Apr 2026, formerly Mysticeti; Move VM); **IOTA Identity** (Beta, v1.9.9-beta.1); **IOTA Gas Station** (v0.5.2); **IOTA EVM** (L2).
 - **Sui**, **Hedera (HCS)**, **Aptos**, **Solana**, **Base/Ethereum L2s** (candidate-chain context).
 
 *(Full URLs and access dates to be attached in the v1.0 bibliography; all technical claims above were source-verified during the v0.2 review.)*
