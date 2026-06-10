@@ -287,8 +287,9 @@ All Objects share one envelope. Type-specific fields live under `body`.
 {
   "anp_version": "0.3",
   "type": "offer | counter_offer | accept | approve | execute | terminate | memorandum |
+           amend | rescind |
            attest | witness | revoke |
-           assert | dispute | evidence | rule | appeal | enforce |
+           assert | dispute | evidence | rule | appeal | enforce | settle |
            receipt",
   "object_id": "urn:uuid:…",
   "thread_ref": "urn:uuid:…",          // shared across a negotiation/case
@@ -308,7 +309,7 @@ All Objects share one envelope. Type-specific fields live under `body`.
 ```
 
 - **Linkage classes (normative).** Object types divide into two classes:
-  - **Chain Objects** — `offer`, `counter_offer`, `memorandum`, `execute`, `terminate`, `attest`, `assert`, `dispute`, `rule`, `appeal`, `enforce` — extend the Thread's linear, append-only hash chain. A chain Object **MUST** set `previous_hash` to the anchored hash (§6.3) of the current Thread head (`null` only for a Thread's first Object) and `sequence` to its predecessor's `sequence` + 1.
+  - **Chain Objects** — `offer`, `counter_offer`, `memorandum`, `amend`, `rescind`, `execute`, `terminate`, `attest`, `assert`, `dispute`, `rule`, `appeal`, `enforce`, `settle` — extend the Thread's linear, append-only hash chain. A chain Object **MUST** set `previous_hash` to the anchored hash (§6.3) of the current Thread head (`null` only for a Thread's first Object) and `sequence` to its predecessor's `sequence` + 1.
   - **Attachment Objects** — `accept`, `approve`, `witness`, `evidence`, `revoke` — assent to, endorse, vote on, or act on an **already-anchored** Object. An attachment **MUST** set `previous_hash: null`, **MUST** carry its target's anchored hash in the `body` field listed below, and **MUST** set `sequence` to its target's `sequence`. Attachments do **not** advance the Thread head; any number of attachments MAY reference the same target concurrently without creating a fork.
 
     | Attachment `type` | Target field in `body` | Target |
@@ -358,23 +359,25 @@ Trustless escrow enforcement requires the settlement contract to read *what the 
 ```jsonc
 "outcome": {
   "escrow_id": "0x…",
-  "basis": "ruling",      // "ruling" (challenged path) | "uncontested_assertion" (happy path)
+  "basis": "ruling",      // "ruling" (challenged) | "uncontested_assertion" (happy path) | "mutual_settlement" (unanimous waiver)
   "release_bps": 7000,    // basis points to the provider
   "refund_bps": 3000,     // basis points back to the payer
   "penalty_bps": 0,       // additional penalty applied
   "fee_source": "loser_bond",
-  "basis_anchor": "sha3-384:…"   // hash of the Ruling (challenged) OR the expired assertion (uncontested)
+  "milestone": null,             // optional terms.milestones[].id for a partial, tranche-scoped settlement (§7.3)
+  "basis_anchor": "sha3-384:…"   // hash of the Ruling | expired assertion | co-signed settle/rescind
 }
 ```
 
-There are **two enforcement paths**, and the `basis` field tells the escrow contract which one applies:
+There are **three enforcement paths**, and the `basis` field tells the escrow contract which one applies:
 
 - **Challenged path** (`basis: "ruling"`): `basis_anchor` is the Arbiter/panel **Ruling** hash, and the `enforce` Object **MUST** be signed by the entitled Arbiter/panel. The off-chain Ruling carries the human-readable rationale.
 - **Uncontested path** (`basis: "uncontested_assertion"`): there is no arbiter. `basis_anchor` is the asserting party's `assert` hash; the `enforce` Object is **signed by the asserting party**; and the escrow contract **MUST** verify that the asserter's bond was posted at `assert` time (§9.4), that `challenge_window` has elapsed since the assertion's anchor timestamp with **no valid `dispute` anchored** in between (valid = filed by a bound Thread party with the challenger bond, §9.4), and that the numeric directive **matches the asserted outcome** (full release on an undisputed completion `assert`; full refund on an undisputed non-performance `assert`).
+- **Mutual path** (`basis: "mutual_settlement"`): no window needs to elapse. `basis_anchor` is the hash of the co-signed `settle` (§9.4) or `rescind` (§7.4) Object carrying the agreed directive; the escrow contract **MUST** verify **assent to this exact directive from every challenge-entitled party's bound chain account** (per the §10.1 party bindings — via per-party `escrow.approve_settlement` calls or one transaction co-signed by all bound accounts, profile choice) and that the executed directive matches the assented one. Consent is what replaces the window: the parties the window protects have all waived it.
 
 **Contract-readable dispute state (normative).** The uncontested path requires the escrow contract to verify the **absence** of a `dispute` within the window — and a smart contract cannot scan a ledger or prove a negative over a generic event stream. For escrow-backed Threads, profiles **MUST** therefore realize `dispute` and `enforce` anchors as **stateful, contract-readable records in the same composable state space as the escrow** — e.g., anchored via a call on the escrow/registry contract, keyed by `thread_ref`/`escrow_id` — rather than as generic event/message primitives. See §13.1 (requirement 6) and the Hedera caveat in §13.4.
 
-This numeric directive is the **trusted input** the escrow contract acts on. "Trustless enforcement" therefore means *automatic and verifiable **given a valid signature (arbiter or asserter), a posted bond, and an expired challenge window***, not zero-trust. The directive contains only integers and references — no personal data.
+This numeric directive is the **trusted input** the escrow contract acts on. "Trustless enforcement" therefore means *automatic and verifiable **given a valid signature (arbiter or asserter), a posted bond, and an expired or unanimously waived challenge window***, not zero-trust. The directive contains only integers and references — no personal data.
 
 ### 6.3 Canonicalization, signature input & hash coverage
 
@@ -439,7 +442,9 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
 | `accept` | Agreement to the referenced Object's exact terms. |
 | `approve` | A Principal co-signature, required when an action meets/exceeds the mandate escalation threshold. |
 | `execute` | An **explicit, anchored** Object that opens settlement (escrow). It MAY be auto-*generated* by an agent once the required `accept`/`approve` set exists, but it **MUST** exist as an anchored Object — the `EXECUTED` transition is never implicit, so state is always reconstructable from the ledger (M8). |
-| `terminate` | Ends a Thread before binding acceptance. |
+| `terminate` | Ends a Thread **before** binding acceptance. After acceptance, unilateral exit is impossible — use `amend`/`rescind` (consensual) or the dispute machinery (§9). |
+| `amend` | A **co-signed** replacement of the agreed terms after `ACCEPTED`/`EXECUTED` (change order, deadline extension, price adjustment). Multi-signature like `memorandum` (§6.3); becomes the new head on anchoring (§7.4). |
+| `rescind` | A **co-signed** mutual unwinding of the agreement after acceptance. Carries an agreed settlement split (a §6.2.1 directive); terminal on anchoring; settles via `enforce` with `basis: "mutual_settlement"` (§7.4). |
 
 **Agreement modes.** A **Memorandum** is a pure mutual statement of record (an API definition, an agreed wording, a deadline acknowledgement) with `terms.escrow.required = false` and no `acceptance_criteria`. It is realized as a **single `memorandum` Object co-signed by all parties** — assembled via the detached-signature co-signing flow of §6.3 (each party signs the proof-less signing form; the initiator assembles `proof[]` and anchors) — and anchored **once**, reaching `ACCEPTED` on anchoring, which is terminal (no `EXECUTED`/`DISPUTED` tail). This is the low-value, high-frequency case the protocol serves cheaply: **cost ≈ one anchor**, no settlement. (Parties MAY instead use the ordinary `offer`/`accept` exchange, at two anchors.) A **Settlement agreement** (escrow required and/or acceptance criteria present) uses the full machine below.
 
@@ -476,10 +481,27 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
 
 Note how `acceptance_criteria` can reference a required **Attestation** (Pillar II) and `dispute` embeds the **arbitration clause** (Pillar III) — the pillars compose.
 
+**Milestones (optional).** Real service and supply relationships are staged; single-shot escrow forces one Thread per milestone and loses the contractual whole. `terms` MAY therefore declare:
+
+```jsonc
+"milestones": [
+  { "id": "m1", "amount": "0.25", "deadline": "2026-05-29T13:00:00Z",
+    "acceptance_criteria": [ /* per-milestone criteria */ ] },
+  { "id": "m2", "amount": "0.25", "deadline": "2026-06-05T13:00:00Z",
+    "challenge_window": "PT6H" }      // optional per-milestone override
+]
+```
+
+- When present, the milestone amounts **MUST** sum to `escrow.amount`; each entry MAY override `challenge_window` and carry its own `acceptance_criteria`/`deadline`.
+- An `assert` (and a `settle`, §9.4) MAY be **scoped to one milestone** via a `milestone` field in its body; the milestone's window, deadline, and criteria then govern it.
+- An uncontested or mutually settled milestone triggers a **partial `enforce`** whose directive carries the `milestone` reference (§6.2.1) and releases only that tranche; the Thread stays `EXECUTED` for the remaining milestones. Settlement of the final tranche closes the Thread (`enforced`).
+- A `dispute` scoped to a milestone freezes **only that milestone's tranche**; other milestones proceed unless `terms` state otherwise.
+- Settlement-interface impact is minimal: `escrow.settle` already takes the numeric directive — it gains the tranche reference (or a profile maps milestones onto per-milestone `escrow.open` sub-escrows, §10.1).
+
 ### 7.4 State machine
 
 ```
-States:  DRAFT · PROPOSED · ACCEPTED · APPROVED · EXECUTED · TERMINATED   (+ Pillar III window)
+States:  DRAFT · PROPOSED · ACCEPTED · APPROVED · EXECUTED · TERMINATED · RESCINDED   (+ Pillar III window)
 
 DRAFT      ──offer / counter_offer (n rounds)──────────────────────────► PROPOSED
 PROPOSED   ──accept (every party, same head hash)──────────────────────► ACCEPTED
@@ -492,16 +514,21 @@ From ACCEPTED, exactly one branch applies:
   • any committing action AT/ABOVE escalation_threshold:
         ──approve (Principal)──► APPROVED ──execute (anchored)──► open escrow ► EXECUTED
 
+ACCEPTED/EXECUTED ──amend (co-signed by all parties)────────────────────► ACCEPTED (amended head)
+ACCEPTED/EXECUTED ──rescind (co-signed, agreed split)───────────────────► RESCINDED ──enforce──► settled
+
 EXECUTED   ──assert (completion | non-performance, either party)────────► optimistic window → Pillar III
-                                                                          (assert → finalize | dispute)
+                                                                          (assert → finalize | settle | dispute)
 ```
 
 **Transition rules (normative):**
 - A `counter_offer` **MUST** set `previous_hash` to the anchored hash (§6.3) of the current Thread head; this preserves the full negotiation history.
-- **Single binding release path (M1).** `execute` only opens escrow and reaches `EXECUTED`; it never releases funds. *All* settlement — even when an `acceptance_criteria` attestation exists — flows through the Pillar III optimistic window: a party anchors a **completion assertion**, and the attestation is the *evidence backing that assertion*, not an independent auto-release. This guarantees one finality semantics and prevents racing two release paths.
+- **Single binding release path (M1).** `execute` only opens escrow and reaches `EXECUTED`; it never releases funds. *All* settlement — even when an `acceptance_criteria` attestation exists — flows through the Pillar III optimistic window **or its unanimous waiver** (mutual settlement, §9.4; mutual rescission below): a party anchors a **completion assertion**, and the attestation is the *evidence backing that assertion*, not an independent auto-release. The waiver is not a second release path — it is the same path with the protective window waived by exactly the parties it protects. This guarantees one finality semantics and prevents racing two release paths.
 - **Signer/party invariant (m10).** `ACCEPTED` requires an `accept` from **every** DID in `terms.parties`. An `accept` is an **attachment Object** (§6.1): its `body.accepts_hash` carries the anchored hash (§6.3) of the terms head being accepted, and its `previous_hash` is `null`. Every party's `accepts_hash` **MUST** equal the anchored hash of the *same* final head, and each `accept`'s `signers` **MUST** include that party's DID. No party may be bound without its own anchored `accept`.
 - **Accept validity (normative).** An `accept` is valid **iff** its `accepts_hash` equals the Thread head that is current — by ledger anchor order — at the moment the `accept` is anchored. An `accept` anchored after a `counter_offer` has advanced the head is void.
 - If any committing action meets/exceeds the actor's mandate `escalation_threshold`, an `approve` from the corresponding Principal is **REQUIRED** to reach `APPROVED`; otherwise `ACCEPTED` proceeds directly to `execute`.
+- **Amendment (consensual modification, normative).** After `ACCEPTED` (including `EXECUTED`), all parties MAY co-sign an `amend` Object — a chain Object assembled via the §6.3 co-signing flow — whose `previous_hash` is the current head and whose body carries **complete replacement `terms`**. On anchoring it becomes the new head, and the Thread is `ACCEPTED` on the amended terms with **no separate `accept` set** (every party already signed it). Mandate checks re-run against the amended values; if an amended value meets/exceeds a signer's `escalation_threshold`, the corresponding Principal `approve`s **MUST** accompany the amendment. If `escrow.amount` changes, the escrow **MUST** be adjusted through the settlement interface (§10.1) — top-up for increases, a partial-refund directive for decreases — and the amendment is **effective only once the escrow matches** the amended amount.
+- **Mutual rescission (normative).** After `ACCEPTED`, all parties MAY co-sign a `rescind` Object carrying an agreed settlement split as a §6.2.1 numeric directive. Anchoring it is terminal (`RESCINDED`); any escrow settles immediately via `enforce` with `basis: "mutual_settlement"` (§6.2.1) — semantically *nobody breached*, so the dispute machinery is not involved. **Unilateral termination after binding acceptance remains impossible**: `terminate` works only before acceptance, and a party that simply walks away faces the non-performance assert path (§9.4).
 
 **Multi-party scope (C4).** The Thread's *chain* is a single, linearly hash-chained structure — inherently single-writer-at-a-time; assent is expressed by `accept` **attachments** (§6.1), which occupy no chain position. ANP defines two binding patterns and nothing in between:
 - **Bilateral turn-taking** — the 2-party case: alternating `offer`/`counter_offer`, then mutual `accept`.
@@ -641,7 +668,8 @@ Genuine arbiter neutrality at scale remains an open problem (§16.6); ANP specif
 
 | `type` | Meaning |
 |---|---|
-| `assert` | A party anchors a claimed outcome — *completion* ("delivered, criteria met") **or** *non-performance* ("counterparty failed to deliver by deadline"). Starts the optimistic window. Either side MAY assert. |
+| `assert` | A party anchors a claimed outcome — *completion* ("delivered, criteria met") **or** *non-performance* ("counterparty failed to deliver by deadline"). Starts the optimistic window. Either side MAY assert. MAY be scoped to a `terms.milestones[]` entry (§7.3). |
+| `settle` | A **co-signed** waiver of the open challenge window: all challenge-entitled parties sign one Object (§6.3) carrying the agreed settlement directive; authorizes immediate `enforce` with `basis: "mutual_settlement"` (§9.4). MAY be milestone-scoped. |
 | `dispute` | Challenges an `assert` (or a frozen Thread); freezes the relevant escrow and opens the evidence phase. Valid **only** if signed by a DID in `terms.parties` (or its mandated Agent) and accompanied by the challenger bond (§9.4); the escrow contract verifies party membership before freezing (§10.1). |
 | `evidence` | Submits evidence — an attachment Object (§6.1) whose `body.dispute_hash` references the open `dispute`; the body cites Attestations / Objects by anchored hash. Both sides MAY submit evidence concurrently. |
 | `rule` | The Arbiter's binding **Ruling** (itself an Attestation by the Arbiter), carrying the off-chain rationale. |
@@ -654,7 +682,8 @@ Modeled on UMA-style optimistic oracles — efficient when uncontested, escalati
 
 ```
 EXECUTED ──assert (completion OR non-performance, either party)──► ASSERTED
-   │                                            │ no challenge within window
+   │                                            │ no challenge within window, or
+   │                                            │ settle (co-signed waiver — immediate)
    │ dispute within challenge_window            ▼
    ▼                                        ┌──────────┐  enforce
 CHALLENGED ──evidence (both sides)──► RULED │ FINALIZED│ ──────► escrow settled
@@ -667,6 +696,7 @@ FINALIZED ──enforce──► settled
 ```
 
 - **Assert-and-wait.** An `assert` stands and auto-finalizes if no `dispute` is filed within `challenge_window`. This keeps the happy path cheap and fast. On finalization the **asserting party** anchors an `enforce` with `basis: "uncontested_assertion"` (§6.2.1) — **no arbiter is involved**; the escrow contract checks only that the asserter's bond was posted, that the window elapsed with no valid `dispute`, and that the directive matches the asserted outcome.
+- **Mutual settlement — the cooperative fast path (M9).** When every party an open window protects is satisfied, waiting out `challenge_window` is pure adoption drag (a 24 h delay on a machine-speed transaction). All challenge-entitled parties MAY therefore co-sign a **`settle`** Object (§6.3 co-signing flow) referencing the open `assert` via the chain (and, where staged, a `milestone`), carrying the agreed numeric directive — typically full release, but any negotiated split (e.g., 90/10 over a minor defect) is valid, since unanimity replaces adjudication. Anchoring it **waives the remaining window by unanimous consent** and authorizes immediate `enforce` with `basis: "mutual_settlement"`; the escrow contract verifies per-account assent as defined in §6.2.1/§10.1. The window applies in full the moment anyone withholds assent — cooperation is rewarded with instant settlement, never required.
 - **Non-performance is covered (M5).** The silent non-performer is the canonical agent failure (lost memory, hallucination). If no completion `assert` is anchored by `terms.deadline + grace`, the counterparty MAY anchor a **non-performance `assert`**. Like any assert it runs the `challenge_window` and then settles via `enforce` — an undisputed non-performance assert yields a refund (`basis: "uncontested_assertion"`), keeping the single settlement path of §7.4/§10.1. Either side can start the clock; a frozen `EXECUTED` Thread cannot strand escrow indefinitely.
 - **Bonds are mandatory on the assertive path (the UMA construction).** For escrow-bearing Threads, the **asserter MUST post a bond at `assert` time** and the **challenger MUST post a bond at `dispute` time** (`bond.post`, §10.1) — an `assert` or `dispute` without its bond is invalid and starts or stops no window. Sizing comes from `terms.dispute.bond` (REQUIRED when `escrow.required`), e.g. a basis-point share of the escrow with a **floor covering the arbiter fee schedule**. A successfully challenged false assertion forfeits the asserter's bond to the challenger and the arbiter fees (§10.3); a failed challenge forfeits the challenger's bond symmetrically. Without a mandatory asserter bond, false completion-asserts would be free while honest challenges cost money — a cost asymmetry favoring the liar.
 - **Who may dispute (normative).** A `dispute` is valid only if signed by a DID in `terms.parties` (or its mandated Agent) and bonded as above; the escrow contract **MUST** verify party membership before freezing, using the party→chain-account bindings recorded at `escrow.open` (§10.1). Outsider anchors carrying a copied `thread_ref` are ignored per the authorized-writer rule (§6.1) and freeze nothing.
@@ -690,15 +720,19 @@ ANP defines an abstract settlement interface that each Profile binds to native c
 ```
 escrow.open(thread_ref, terms_hash, parties, amount, asset, conditions) → escrow_id
                                          // parties: DID → chain-account bindings (gate dispute recording, §9.4)
-escrow.settle(escrow_id, outcome)        // apply the §6.2.1 directive: release/refund/penalty in one call
+escrow.settle(escrow_id, outcome)        // apply the §6.2.1 directive: release/refund/penalty in one call;
+                                         // outcome.milestone scopes the call to one tranche (§7.3)
+escrow.approve_settlement(escrow_id, outcome_hash)
+                                         // per-party assent from a bound account, for basis: "mutual_settlement"
+escrow.adjust(escrow_id, new_amount)     // top-up / partial refund when an `amend` changes escrow.amount (§7.4)
 
 bond.post(thread_ref, role, amount, asset) → bond_id   // notary/oracle/arbiter/party stake
 bond.slash(bond_id, outcome)                            // executed per a final ruling directive
 bond.release(bond_id)                                   // returned when obligations discharged
 ```
 
-- `escrow.settle` takes the single numeric **outcome directive** (§6.2.1) so release, refund, and penalty are one atomic, verifiable action rather than three racing calls.
-- `conditions` reference anchors (a final Ruling / `enforce` directive). Per §7.4, settlement always flows through the optimistic window — there is no separate auto-release path.
+- `escrow.settle` takes the single numeric **outcome directive** (§6.2.1) so release, refund, and penalty are one atomic, verifiable action rather than three racing calls. With `outcome.milestone` set, it settles one tranche and leaves the rest escrowed; profiles MAY instead map `terms.milestones[]` onto per-milestone sub-escrows via repeated `escrow.open`.
+- `conditions` reference anchors (a final Ruling / `enforce` directive). Per §7.4, settlement always flows through the optimistic window or its unanimous waiver (`basis: "mutual_settlement"`) — there is no separate auto-release path.
 - **No `x402` dependency**: where the chain provides native value transfer and stablecoins, ANP uses them directly; x402 is at most an EVM-profile adapter, avoiding redundant payment machinery.
 
 ### 10.2 Assets
@@ -868,10 +902,10 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 Normative JSON Schemas (to be finalized in v1.0) will cover:
 
 - the **Object envelope** (§6.1) — the full `type` enum (incl. `memorandum`, `assert`, `revoke`, and the non-anchored `receipt`), the **chain/attachment linkage classes** with per-attachment target fields, `signers[].authority` (mandate | accreditation), and the `proof[]`↔`signers[]` correspondence;
-- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `dispute` with `challenge_window`, `evidence_window`, `ruling_deadline`, `bond`, `timeout_default`, and `appeal.appeal_window`), the `accept` body `{accepts_hash}`, the `approve` body `{approves_hash}`, and the `assert` body (completion | non-performance, contract-head ref, claimed outcome, evidence anchors); Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}`, the `witnessing` flag, the `witness` body `{attestation_hash, verdict, reason_hash}`, and the `revoke` body `{revokes, reason_hash, status_list_update}`; Pillar III the `evidence` body (`{dispute_hash, …}`) and `rule`;
+- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `milestones[]`, `dispute` with `challenge_window`, `evidence_window`, `ruling_deadline`, `bond`, `timeout_default`, and `appeal.appeal_window`), the `accept` body `{accepts_hash}`, the `approve` body `{approves_hash}`, the `amend` body (replacement `terms`), the `rescind` body (agreed §6.2.1 directive), and the `assert` body (completion | non-performance, contract-head ref, claimed outcome, evidence anchors, optional `milestone`); Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}`, the `witnessing` flag, the `witness` body `{attestation_hash, verdict, reason_hash}`, and the `revoke` body `{revokes, reason_hash, status_list_update}`; Pillar III the `evidence` body (`{dispute_hash, …}`), `rule`, and the `settle` body (agreed §6.2.1 directive, optional `milestone`);
 - the **Mandate** VC (§5.3) incl. `constraints.fx_ref`, per-`scope` caps, and the `status_list` reference;
 - the **quorum** object (§8.3) `{witness_pool, selection, witness_set, n, m, witness_window}`;
-- the **Anchor record** (§6.2) `{object_hash, object_type, thread_ref, status, anchored_by, timestamp, locator, outcome}` and the **outcome directive** (§6.2.1) `{escrow_id, basis, release_bps, refund_bps, penalty_bps, fee_source, basis_anchor}`;
+- the **Anchor record** (§6.2) `{object_hash, object_type, thread_ref, status, anchored_by, timestamp, locator, outcome}` and the **outcome directive** (§6.2.1) `{escrow_id, basis, release_bps, refund_bps, penalty_bps, fee_source, milestone, basis_anchor}`;
 - the **suite registry** (§6.5) mapping suite IDs → permitted `alg` set + tagged hash.
 
 All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization: JCS (RFC 8785); the signature input is the proof-less **signing form**, and the anchored `object_hash` covers the assembled `proof[]` (§6.3); digests are algorithm-tagged (§6.5).
@@ -881,7 +915,7 @@ All `body` instances **MUST** validate against the schema registered for their `
 These trace the four motivating use cases through the state machines to validate completeness.
 
 **B.1 Factory purchase (high-value Contracting + HITL escalation).**
-Buyer-agent `offer` → Seller-agent `counter_offer` (price/delivery) → Buyer-agent `accept`. Value exceeds both mandates' `escalation_threshold` → each Principal adds an `approve`. `execute` (anchored) opens escrow in EURe. Delivery is notarized (B.3-style attestation). The seller anchors a completion `assert` backed by that attestation; with no `dispute` in the `challenge_window`, the Thread `FINALIZED`s and `enforce` settles escrow. Had the seller gone silent past `deadline + grace`, the buyer would anchor a non-performance `assert` and reclaim escrow. Memory loss anywhere is irrelevant — state is reconstructable from anchors + recoverable Objects.
+Buyer-agent `offer` → Seller-agent `counter_offer` (price/delivery) → Buyer-agent `accept`. Value exceeds both mandates' `escalation_threshold` → each Principal adds an `approve`. `execute` (anchored) opens escrow in EURe. Delivery is notarized (B.3-style attestation). The seller anchors a completion `assert` backed by that attestation; with no `dispute` in the `challenge_window`, the Thread `FINALIZED`s and `enforce` settles escrow. (Faster, since the buyer is satisfied: buyer and seller co-sign a `settle`, waiving the window — settlement is immediate, §9.4.) Had the seller gone silent past `deadline + grace`, the buyer would anchor a non-performance `assert` and reclaim escrow. Memory loss anywhere is irrelevant — state is reconstructable from anchors + recoverable Objects.
 
 **B.2 API-definition agreement (low-value, high-frequency Contracting).**
 Two agents co-sign a single `memorandum` Object (the API contract: endpoints, types, versioning, deprecation date) — `terms.escrow.required = false`, no `acceptance_criteria`. Below threshold → fully autonomous, no human, no escrow. It is anchored **once** (one anchor) and is terminal at `ACCEPTED`. This is the case that only works because per-determination cost is near zero.
@@ -905,6 +939,9 @@ Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` w
 - **Grind-resistant VRF selection (§8.3, §9.2, §11, §13.1; review issue #9):** VRF seeds for witness and arbiter draws **MUST** combine the anchored hash with chain randomness fixed only *after* the anchor (seeding by requester-controlled content alone is forbidden); profiles supporting VRF selection MUST name a post-anchor randomness source.
 - **Dispute liveness bounds (§7.3, §9.2, §9.4, §11; review issue #10):** `evidence_window` and `ruling_deadline` are REQUIRED in the arbitration clause; late evidence is disregarded; arbiter timeout forfeits fee/bond and triggers a VRF replacement draw or escalation to the appeal panel, with a `timeout_default` settlement as last resort; appeal-panel timeout makes the first-instance Ruling final. `CHALLENGED` can no longer strand escrow.
 - **Mandatory asserter/challenger bonds (§6.2.1, §7.3, §9.4, §11; review issue #12):** for escrow-bearing Threads the asserter bond (at `assert`) and challenger bond (at `dispute`) are **MUST**s with a `terms.dispute.bond` sizing rule (bps of escrow, floor = arbiter fee schedule); §6.2.1's precondition list is reconciled accordingly; a successfully challenged false assertion forfeits the asserter's bond.
+- **Mutual settlement fast path (§6.2.1, §7.4, §9.3, §9.4, §10.1; review issue #14):** new co-signed `settle` Object — all challenge-entitled parties waive the remaining challenge window by unanimous consent and authorize immediate `enforce` with the new `basis: "mutual_settlement"`; the escrow contract verifies per-account assent via the §10.1 party bindings (`escrow.approve_settlement`). M1's single-release-path semantics are preserved: the waiver is the optimistic path minus a window that everyone it protects has waived.
+- **Amendment & mutual rescission (§7.2, §7.4, §10.1; review issue #15):** new co-signed `amend` (replacement terms become the new head; mandate checks re-run; escrow adjusted via `escrow.adjust` before the amendment is effective) and `rescind` (terminal `RESCINDED` state; agreed split settles via `basis: "mutual_settlement"`). Unilateral termination after binding acceptance remains impossible.
+- **Milestones / partial performance (§6.2.1, §7.3, §7.4, §9.3, §9.4, §10.1; review issue #22):** optional `terms.milestones[]` (amounts summing to `escrow.amount`, per-milestone deadlines/criteria/window overrides); `assert`/`settle` MAY be milestone-scoped; an uncontested or mutually settled milestone triggers a partial, tranche-scoped `enforce` (`outcome.milestone`) while the Thread stays `EXECUTED`; milestone-scoped disputes freeze only their tranche.
 - **Authorized-writer rule (§6.1, §6.2.1, §9.3, §9.4, §10.1, §11; review issue #13):** Thread state derivation considers only schema-valid, available Objects signed by authorized Thread participants — outsider anchors with a copied `thread_ref` are ignored; a `dispute` is valid only from a Thread party (or mandated Agent), verified on-chain via party→chain-account bindings recorded at `escrow.open`. Closes the dispute-freeze-griefing and thread-pollution vectors.
 
 #### Changes from v0.1 (v0.2)
