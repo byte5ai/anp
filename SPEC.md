@@ -2,11 +2,13 @@
 
 ## An Open, DLT-Neutral Trust Layer for Agent-to-Agent Agreements, Notarization, and Dispute Resolution
 
-*Concept Paper / Draft Specification — v0.2 (May 2026)*
+*Concept Paper / Draft Specification — v0.3-draft (June 2026)*
 
 **Status:** Draft (Concept). This document is a design specification intended to be stable enough to implement against, while explicitly marking unresolved questions. It is not a final standard.
 
-**Editorial note (v0.1 → v0.2):** v0.1 (March 2026) described a single-purpose *negotiation* protocol. v0.2 broadens the scope to a three-pillar **trust layer** — **Contracting, Notarization, Dispute Resolution** — on a shared identity foundation, corrects several technical and attribution errors found during review (see [Appendix C](#appendix-c-changes-from-v01)), and reorients the design around DLT-neutral primitives.
+**Editorial note (v0.1 → v0.2):** v0.1 (March 2026) described a single-purpose *negotiation* protocol. v0.2 broadens the scope to a three-pillar **trust layer** — **Contracting, Notarization, Dispute Resolution** — on a shared identity foundation, corrects several technical and attribution errors found during review, and reorients the design around DLT-neutral primitives.
+
+**Editorial note (v0.2 → v0.3):** v0.3 incorporates the findings of the June 2026 spec review (tracked as GitHub issues on the specification repository). See [Appendix C](#appendix-c-change-log) for the change log.
 
 ---
 
@@ -116,7 +118,7 @@ ANP is a multi-party protocol. The following roles are defined; one real-world e
 
 - **ANP Object** — the atomic, signed, schema-validated unit of the protocol (an offer, an acceptance, an attestation, a ruling, …). The *binding artifact*. Stored off-chain; its hash is anchored on-chain.
 - **Anchor** — an on-chain record committing to an ANP Object: `{ object_hash, object_type, thread_ref, status, anchored_by, timestamp }`. Contains **no** payload and **no** PII.
-- **Thread** — a hash-linked sequence of ANP Objects sharing a `thread_ref` (a negotiation, a notarization case, a dispute case).
+- **Thread** — a hash-linked sequence of chain Objects, plus their attachment Objects (§6.1), sharing a `thread_ref` (a negotiation, a notarization case, a dispute case).
 - **Mandate** — a VC issued by a Principal to an Agent defining the Agent's authority envelope.
 - **Attestation** — an ANP Object of type `attestation`: a signed statement by a Notary about a subject, anchored on-chain.
 - **Suite** — the cryptographic signature/hash algorithm set in force for an Object (see [§6.5](#65-cryptographic-agility--post-quantum-readiness)).
@@ -279,15 +281,15 @@ All Objects share one envelope. Type-specific fields live under `body`.
 
 ```jsonc
 {
-  "anp_version": "0.2",
+  "anp_version": "0.3",
   "type": "offer | counter_offer | accept | approve | execute | terminate | memorandum |
            attest | witness | revoke |
            assert | dispute | evidence | rule | appeal | enforce |
            receipt",
   "object_id": "urn:uuid:…",
   "thread_ref": "urn:uuid:…",          // shared across a negotiation/case
-  "sequence": 3,                        // monotonic within the thread
-  "previous_hash": "sha3-384:…",        // tagged hash-link to predecessor (or null for the first)
+  "sequence": 3,                        // chain position (see linkage rules below)
+  "previous_hash": "sha3-384:…",        // chain Objects: anchored hash of the predecessor (null for a Thread's first); attachments: null
   "timestamp": "2026-05-29T12:00:00Z",  // asserted by signer; on-chain anchor is authoritative
   "suite": "anp-suite-2",               // cryptographic suite identifier (see §6.5)
   "signers": [
@@ -301,12 +303,24 @@ All Objects share one envelope. Type-specific fields live under `body`.
 }
 ```
 
-- `previous_hash` and `sequence` make each Thread an append-only, tamper-evident chain.
-- `proof` is an array → multi-signature and quorum are first-class. Each proof entry names its algorithm, supporting per-signer agility.
+- **Linkage classes (normative).** Object types divide into two classes:
+  - **Chain Objects** — `offer`, `counter_offer`, `memorandum`, `execute`, `terminate`, `attest`, `assert`, `dispute`, `rule`, `appeal`, `enforce` — extend the Thread's linear, append-only hash chain. A chain Object **MUST** set `previous_hash` to the anchored hash (§6.3) of the current Thread head (`null` only for a Thread's first Object) and `sequence` to its predecessor's `sequence` + 1.
+  - **Attachment Objects** — `accept`, `approve`, `witness`, `evidence`, `revoke` — assent to, endorse, vote on, or act on an **already-anchored** Object. An attachment **MUST** set `previous_hash: null`, **MUST** carry its target's anchored hash in the `body` field listed below, and **MUST** set `sequence` to its target's `sequence`. Attachments do **not** advance the Thread head; any number of attachments MAY reference the same target concurrently without creating a fork.
+
+    | Attachment `type` | Target field in `body` | Target |
+    |---|---|---|
+    | `accept` | `accepts_hash` | the terms head being accepted (§7.4) |
+    | `approve` | `approves_hash` | the Object embodying the action the Principal co-signs (§7.4) |
+    | `witness` | `attestation_hash` | the anchored Attestation being voted on (§8.3) |
+    | `evidence` | `dispute_hash` | the `dispute` that opened the evidence phase (§9.3) |
+    | `revoke` | `revokes` | the attestation being revoked (§8.6) |
+
+- **Ordering authority.** The ledger's anchor order (§6.2) is authoritative wherever concurrent writers interact — fork resolution among chain Objects and validity-at-anchoring-time checks for attachments (§7.4). `sequence` is a derived consistency field, not an ordering authority: a Verifier **MUST** reject a chain Object whose `sequence` is not its predecessor's + 1; replay protection rests on `object_id` uniqueness within a Thread.
+- `proof` is an array → multi-signature and quorum are first-class. Each proof entry names its algorithm, supporting per-signer agility. The signature input and the hash coverage of `proof[]` are defined in [§6.3](#63-canonicalization-signature-input--hash-coverage).
 - **Signer/proof correspondence (normative):** every `proof[]` entry **MUST** correspond 1:1 to a `signers[]` entry with the same `did`; a Verifier **MUST** reject Objects with proofs from non-listed signers or listed signers without a proof. Each signer's `authority` is either a `mandate` (for an Agent acting under §5.3) or an `accreditation` (for a Notary/Oracle/Arbiter under §5.4); the `authority` named is what the Verifier checks the action against.
 - **Suite/alg binding (normative):** the `suite` enumerates the permitted signature `alg` values and the hash algorithm; every `proof.alg` **MUST** be a member of the active `suite`, and all Objects in a Thread **MUST** share the Thread's pinned suite (`terms.governing_suite` where present). See [§6.5](#65-cryptographic-agility--post-quantum-readiness).
 - **Non-anchored type.** `receipt` (a delivery acknowledgement, §6.4) is a **transport-only** Object: it is signed and exchanged peer-to-peer but **not** anchored, and is therefore exempt from the data-availability rule. Every other type is anchored.
-- **`memorandum`** is a single Object co-signed by all parties (multi-signature `proof[]`), used for record-only agreements (§7.2). **`assert`** starts the dispute window (§9.3).
+- **`memorandum`** is a single Object co-signed by all parties (multi-signature `proof[]`, assembled via the detached-signature co-signing flow of §6.3), used for record-only agreements (§7.2). **`assert`** starts the dispute window (§9.3).
 - `body` **MUST** validate against the JSON Schema registered for `type` (see [Appendix A](#appendix-a-schemas)).
 
 ### 6.2 On-chain anchor record
@@ -315,7 +329,7 @@ What is written to the ledger:
 
 ```jsonc
 {
-  "object_hash": "sha3-384:…",   // tagged hash of the canonicalized ANP Object (see §6.5)
+  "object_hash": "sha3-384:…",   // tagged hash of the canonicalized anchored form, incl. proof[] (see §6.3, §6.5)
   "object_type": "accept",
   "thread_ref": "urn:uuid:…",    // opaque random UUID
   "status": "active",            // coarse lifecycle flag (see below)
@@ -355,9 +369,20 @@ There are **two enforcement paths**, and the `basis` field tells the escrow cont
 
 This numeric directive is the **trusted input** the escrow contract acts on. "Trustless enforcement" therefore means *automatic and verifiable **given a valid signature (arbiter or asserter), a posted bond, and an expired challenge window***, not zero-trust. The directive contains only integers and references — no personal data.
 
-### 6.3 Canonicalization
+### 6.3 Canonicalization, signature input & hash coverage
 
-To make hashes reproducible, Objects **MUST** be canonicalized before hashing using a deterministic scheme (JCS, RFC 8785, RECOMMENDED). The hash algorithm is governed by the active `suite` ([§6.5](#65-cryptographic-agility--post-quantum-readiness)).
+To make signatures and hashes reproducible, Objects **MUST** be canonicalized using **JCS (RFC 8785)**. The hash algorithm is governed by the active `suite` ([§6.5](#65-cryptographic-agility--post-quantum-readiness)).
+
+Every Object has **two canonical forms**, and the distinction is normative — it is what makes multi-signature Objects assemblable without deadlock:
+
+1. **Signing form** — the envelope with the `proof` member **removed entirely** (not present as `[]` or `null`). The **signature input** for every `proof[]` entry **MUST** be the UTF-8 octets of the JCS canonicalization of the signing form. Because the signing form excludes `proof`, all co-signers sign byte-identical input, and signatures can be collected independently and in parallel — party A never needs party B's proof to produce its own.
+2. **Anchored form** — the complete Object **including** the assembled `proof[]`. The anchored **`object_hash`** (§6.2) **MUST** be the tagged hash of the JCS canonicalization of the anchored form, so the proofs themselves are tamper-evident relative to the anchor.
+
+**Reference rule (normative).** Wherever one Object references another by hash — `previous_hash`, an attachment's target field (§6.1), `outcome.basis_anchor` (§6.2.1), evidence references (§9.3) — the reference **MUST** be to the **anchored form's hash**. The anchored hash is the only form that appears on-chain, so it is the only unambiguous, ledger-checkable reference.
+
+**Deterministic proof assembly (normative).** `proof[]` entries **MUST** appear in the same order as their corresponding `signers[]` entries, so that every party assembles a byte-identical anchored form and derives the same `object_hash`.
+
+**Co-signing flow (multi-signature Objects, e.g. `memorandum` §7.2).** An initiator constructs the signing form with the complete `signers[]` list and distributes it to all signers; each signer returns a **detached signature** computed over the signing form; the initiator assembles `proof[]` in `signers[]` order and anchors the resulting Object once. A Verifier re-derives the signing form from any anchored Object by removing `proof` and re-canonicalizing, then verifies every `proof[]` entry against it.
 
 ### 6.4 On-chain vs. off-chain — the anchoring pattern
 
@@ -407,7 +432,7 @@ Let two or more parties form a binding, private, tamper-evident agreement about 
 | `execute` | An **explicit, anchored** Object that opens settlement (escrow). It MAY be auto-*generated* by an agent once the required `accept`/`approve` set exists, but it **MUST** exist as an anchored Object — the `EXECUTED` transition is never implicit, so state is always reconstructable from the ledger (M8). |
 | `terminate` | Ends a Thread before binding acceptance. |
 
-**Agreement modes.** A **Memorandum** is a pure mutual statement of record (an API definition, an agreed wording, a deadline acknowledgement) with `terms.escrow.required = false` and no `acceptance_criteria`. It is realized as a **single `memorandum` Object co-signed by all parties** (via the multi-signature `proof[]` array) and anchored **once**, reaching `ACCEPTED` on anchoring, which is terminal (no `EXECUTED`/`DISPUTED` tail). This is the low-value, high-frequency case the protocol serves cheaply: **cost ≈ one anchor**, no settlement. (Parties MAY instead use the ordinary `offer`/`accept` exchange, at two anchors.) A **Settlement agreement** (escrow required and/or acceptance criteria present) uses the full machine below.
+**Agreement modes.** A **Memorandum** is a pure mutual statement of record (an API definition, an agreed wording, a deadline acknowledgement) with `terms.escrow.required = false` and no `acceptance_criteria`. It is realized as a **single `memorandum` Object co-signed by all parties** — assembled via the detached-signature co-signing flow of §6.3 (each party signs the proof-less signing form; the initiator assembles `proof[]` and anchors) — and anchored **once**, reaching `ACCEPTED` on anchoring, which is terminal (no `EXECUTED`/`DISPUTED` tail). This is the low-value, high-frequency case the protocol serves cheaply: **cost ≈ one anchor**, no settlement. (Parties MAY instead use the ordinary `offer`/`accept` exchange, at two anchors.) A **Settlement agreement** (escrow required and/or acceptance criteria present) uses the full machine below.
 
 ### 7.3 Terms object
 
@@ -460,22 +485,23 @@ EXECUTED   ──assert (completion | non-performance, either party)────
 ```
 
 **Transition rules (normative):**
-- A `counter_offer` **MUST** reference the `previous_hash` of the current Thread head; this preserves the full negotiation history.
+- A `counter_offer` **MUST** set `previous_hash` to the anchored hash (§6.3) of the current Thread head; this preserves the full negotiation history.
 - **Single binding release path (M1).** `execute` only opens escrow and reaches `EXECUTED`; it never releases funds. *All* settlement — even when an `acceptance_criteria` attestation exists — flows through the Pillar III optimistic window: a party anchors a **completion assertion**, and the attestation is the *evidence backing that assertion*, not an independent auto-release. This guarantees one finality semantics and prevents racing two release paths.
-- **Signer/party invariant (m10).** `ACCEPTED` requires an `accept` from **every** DID in `terms.parties`, each referencing the *same* final head hash, and each `accept`'s `signers` **MUST** include that party's DID. No party may be bound without its own anchored `accept`.
+- **Signer/party invariant (m10).** `ACCEPTED` requires an `accept` from **every** DID in `terms.parties`. An `accept` is an **attachment Object** (§6.1): its `body.accepts_hash` carries the anchored hash (§6.3) of the terms head being accepted, and its `previous_hash` is `null`. Every party's `accepts_hash` **MUST** equal the anchored hash of the *same* final head, and each `accept`'s `signers` **MUST** include that party's DID. No party may be bound without its own anchored `accept`.
+- **Accept validity (normative).** An `accept` is valid **iff** its `accepts_hash` equals the Thread head that is current — by ledger anchor order — at the moment the `accept` is anchored. An `accept` anchored after a `counter_offer` has advanced the head is void.
 - If any committing action meets/exceeds the actor's mandate `escalation_threshold`, an `approve` from the corresponding Principal is **REQUIRED** to reach `APPROVED`; otherwise `ACCEPTED` proceeds directly to `execute`.
 
-**Multi-party scope (C4).** The Thread is a single, linearly hash-chained structure — inherently single-writer-at-a-time. ANP therefore defines two binding patterns and nothing in between:
+**Multi-party scope (C4).** The Thread's *chain* is a single, linearly hash-chained structure — inherently single-writer-at-a-time; assent is expressed by `accept` **attachments** (§6.1), which occupy no chain position. ANP defines two binding patterns and nothing in between:
 - **Bilateral turn-taking** — the 2-party case: alternating `offer`/`counter_offer`, then mutual `accept`.
-- **Coordinator-assembled N-party** — for N>2: one Party acts as **coordinator** and assembles the final terms as a single head Object; all other Parties only `accept` that identical head hash (no concurrent counters). This sidesteps fork/ordering ambiguity that free-for-all concurrent counters would create.
-- **Accept-invalidation (normative).** A set of `accept`s is binding only if every one references the *current* head. Any new `counter_offer` referencing the current head **supersedes** it and thereby invalidates all prior `accept`s on the now-superseded head. **Supersession is derived off-chain** from head ordering — a Verifier replays the Thread and treats accepts on a non-current head as void; **no party's prior `accept` anchor needs to be mutated** (which avoids the §6.5 problem of who may change another signer's anchor status). A profile MAY *additionally* mark `superseded` on-chain, but only the coordinator/contract authority defined for the Thread may do so, and it is never required for correctness. Concurrent forks (two Objects sharing a `previous_hash`) are resolved by anchor ordering: the first-anchored is the head. Free concurrent multi-party negotiation is explicitly **out of scope** for binding Threads in v0.2.
+- **Coordinator-assembled N-party** — for N>2: one Party acts as **coordinator** and assembles the final terms as a single head Object; all other Parties accept that identical head by anchoring `accept` attachments whose `accepts_hash` references it (no concurrent counters). Because attachments carry no `previous_hash`, the N−1 concurrent `accept`s do **not** fork the chain.
+- **Accept-invalidation (normative).** A set of `accept`s is binding only if every one is valid under the accept-validity rule above (its `accepts_hash` equals the head current at its anchoring time). A new `counter_offer` extending the head **supersedes** it and thereby invalidates all prior `accept`s on the superseded head. **Supersession is derived off-chain** from head ordering — a Verifier replays the Thread and treats accepts referencing a non-current head as void; **no party's prior `accept` anchor needs to be mutated** (which avoids the §6.5 problem of who may change another signer's anchor status). A profile MAY *additionally* mark `superseded` on-chain, but only the coordinator/contract authority defined for the Thread may do so, and it is never required for correctness. Concurrent forks (two **chain Objects** sharing a `previous_hash`) are resolved by anchor ordering: the first-anchored is the head. Free concurrent multi-party negotiation is explicitly **out of scope** for binding Threads in v0.3.
 
 ### 7.5 Anti-hallucination / determinism properties
 
 - **Only structured terms bind.** Free-text is non-binding commentary. "Reasonable timeframe" cannot be a binding term; "2026-05-29T13:00:00Z" can.
 - **The ledger is ground truth.** An agent recovering from a context reset reconstructs state by reading anchors + fetching Objects, not from memory.
 - **Mandate caps bound blast radius.** A hallucinating agent cannot exceed `max_value`/`aggregate_value`, and high-value actions require a human co-signature.
-- **Replay/idempotency.** `object_id` + `sequence` + `previous_hash` make replays and reorderings detectable and rejectable.
+- **Replay/idempotency.** `object_id` uniqueness, chain linkage (`sequence` + `previous_hash`), anchored target references for attachments, and the authoritative ledger anchor order make replays and reorderings detectable and rejectable.
 
 ---
 
@@ -537,7 +563,7 @@ For higher assurance, an Attestation MAY require an **M-of-N witness quorum**. T
 
 Normative rules:
 - The **invited set of N must be verifiable**, so the requester cannot cherry-pick after the fact. Either (a) `selection: "explicit"` lists `witness_set` — N **distinct** DIDs, each a member of `witness_pool`; or (b) `selection: "vrf"` derives the N deterministically from `witness_pool` via a verifiable random function seeded by the Attestation hash. A Verifier **MUST** reject a quorum whose participating witnesses are not exactly drawn from this verifiable set.
-- Each Witness **MUST** add an **independent, separately-anchored `witness` Object** referencing the (already-anchored) Attestation hash. **One vote per DID** — duplicate votes from the same DID count once. The single-object multi-signature form is **not** used for quorum (independent signers cannot co-sign one canonicalized Object without a defined aggregation scheme).
+- Each Witness **MUST** add an **independent, separately-anchored `witness` Object** — an attachment (§6.1) whose `body.attestation_hash` references the already-anchored Attestation. **One vote per DID** — duplicate votes from the same DID count once. The single-object multi-signature form is **not** used for quorum — not because co-signing is undefined (§6.3 defines the flow), but because a quorum needs what one co-signed Object cannot provide: a per-witness independent anchor timestamp (the `witness_window` check), independent `concur`/`dissent` verdicts, and no assembly coordinator. `memorandum` (§7.2) uses the co-signing flow; quorums use separate anchored votes.
 - A `witness` Object carries a verdict `{concur | dissent}` with an optional reason hash. The `witness_window` **starts at the Attestation's anchor timestamp**; the Attestation reaches `WITNESSED` when **M of the N** concur within it.
 - **Dissent and timeout:** silence from an invited witness counts as **non-concurrence**. If fewer than M concur before the window closes (through dissent or silence), the quorum **fails**; the Attestation remains `ANCHORED` but unwitnessed and **MUST NOT** satisfy an `acceptance_criteria` that required the quorum. Dissents are part of the permanent record.
 
@@ -605,7 +631,7 @@ Genuine arbiter neutrality at scale remains an open problem (§16.6); ANP specif
 |---|---|
 | `assert` | A party anchors a claimed outcome — *completion* ("delivered, criteria met") **or** *non-performance* ("counterparty failed to deliver by deadline"). Starts the optimistic window. Either side MAY assert. |
 | `dispute` | Challenges an `assert` (or a frozen Thread); freezes the relevant escrow and opens the evidence phase. |
-| `evidence` | Submits evidence (typically references to Attestations / Objects by hash). |
+| `evidence` | Submits evidence — an attachment Object (§6.1) whose `body.dispute_hash` references the open `dispute`; the body cites Attestations / Objects by anchored hash. Both sides MAY submit evidence concurrently. |
 | `rule` | The Arbiter's binding **Ruling** (itself an Attestation by the Arbiter), carrying the off-chain rationale. |
 | `appeal` | Escalates a Ruling to the final panel, exactly once, if `appeal.allowed`. |
 | `enforce` | Anchors the numeric settlement directive (§6.2.1) and executes it on the escrow contract. MAY be auto-generated but **MUST** be an anchored Object. |
@@ -680,7 +706,7 @@ ANP uses the **Settlement Layer's native asset and/or stablecoins**. Native **EU
 | **Hallucinated / loose terms** | Only schema-valid structured terms bind; free text is non-binding. |
 | **Lost memory / context reset** | Ledger anchors + fetched Objects are authoritative; agents reconstruct, never "recall." |
 | **Manipulated database** | Off-chain Objects are useless if altered (hash mismatch vs. anchor); ordering/existence are on-chain. |
-| **Replay / reordering** | `object_id`, monotonic `sequence`, `previous_hash` chaining; verifiers reject duplicates/gaps. |
+| **Replay / reordering** | `object_id` uniqueness; `previous_hash`/`sequence` chaining for chain Objects; anchored-target references for attachments; ledger anchor order authoritative (§6.1); verifiers reject duplicates/gaps. |
 | **Over-commitment by an agent** | Mandate `max_value`/`aggregate_value`/`escalation_threshold`; high-value actions need Principal `approve`. |
 | **Key compromise** | DID-method key rotation/revocation; suite agility; bounded escrow exposure; mandate expiry. |
 | **Sybil third parties** | Accreditation VCs + Trust Lists + bonding; reputation weighting; optional proof-of-humanity for Principals. |
@@ -749,9 +775,9 @@ Selection is a Profile decision; the abstract requirements (§13.1) are the gate
 
 ## 14. Conformance & Profiles
 
-An implementation conforms to ANP v0.2 if it satisfies the **Core** requirements and at least one **Pillar** and one **Profile**.
+An implementation conforms to ANP v0.3 if it satisfies the **Core** requirements and at least one **Pillar** and one **Profile**.
 
-- **Core (MUST):** ANP Object envelope (§6.1), canonicalization (§6.3), anchoring pattern (§6.2/§6.4), DID-based identity (§5.1), VC-based roles/mandates (§5.2/§5.3), suite agility with a PQC-capable suite available (§6.5).
+- **Core (MUST):** ANP Object envelope incl. linkage classes (§6.1), canonicalization & signature input (§6.3), anchoring pattern (§6.2/§6.4), DID-based identity (§5.1), VC-based roles/mandates (§5.2/§5.3), suite agility with a PQC-capable suite available (§6.5).
 - **Pillar profiles (implement ≥1):** Contracting (§7), Notarization (§8), Dispute Resolution (§9). Dispute Resolution conformance requires the optimistic `process_profile` at minimum.
 - **Settlement profiles (implement ≥1):** the IOTA reference profile (§13.2) or another profile meeting §13.1, exposing the settlement interface (§10.1).
 - **Interop profiles (OPTIONAL):** EVM/ERC-8004/EAS/x402 bindings (§13.3).
@@ -794,7 +820,7 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 
 ## 17. Roadmap
 
-**Phase 1 — This document (now).** Publish the v0.2 concept/draft spec; gather feedback; refine.
+**Phase 1 — This document (now).** Publish the concept/draft spec (v0.2, May 2026; v0.3 draft under review); gather feedback; refine.
 
 **Phase 2 — Proof of Concept (per pillar).**
 - *Contracting:* two agents negotiate a structured service agreement; Objects anchored on IOTA testnet; mandate-gated approval; settlement via a completion `assert` backed by accepted criteria, then an uncontested `enforce`.
@@ -814,14 +840,14 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 
 Normative JSON Schemas (to be finalized in v1.0) will cover:
 
-- the **Object envelope** (§6.1) — the full `type` enum (incl. `memorandum`, `assert`, `revoke`, and the non-anchored `receipt`), `signers[].authority` (mandate | accreditation), and the `proof[]`↔`signers[]` correspondence;
-- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `dispute` with `appeal.appeal_window`) and the `assert` body (completion | non-performance, contract-head ref, claimed outcome, evidence anchors); Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}`, the `witnessing` flag, and the `revoke` body `{revokes, reason_hash, status_list_update}`; Pillar III `evidence`/`rule`;
+- the **Object envelope** (§6.1) — the full `type` enum (incl. `memorandum`, `assert`, `revoke`, and the non-anchored `receipt`), the **chain/attachment linkage classes** with per-attachment target fields, `signers[].authority` (mandate | accreditation), and the `proof[]`↔`signers[]` correspondence;
+- per-`type` `body` schemas — Pillar I `terms` (incl. `governing_suite`, `escrow`, `acceptance_criteria`, `dispute` with `appeal.appeal_window`), the `accept` body `{accepts_hash}`, the `approve` body `{approves_hash}`, and the `assert` body (completion | non-performance, contract-head ref, claimed outcome, evidence anchors); Pillar II `statement` per `subject_kind` with a measurement value object `{quantity, unit (UCUM), scale}`, the `witnessing` flag, the `witness` body `{attestation_hash, verdict, reason_hash}`, and the `revoke` body `{revokes, reason_hash, status_list_update}`; Pillar III the `evidence` body (`{dispute_hash, …}`) and `rule`;
 - the **Mandate** VC (§5.3) incl. `constraints.fx_ref` and per-`scope` caps;
 - the **quorum** object (§8.3) `{witness_pool, selection, witness_set, n, m, witness_window}`;
 - the **Anchor record** (§6.2) `{object_hash, object_type, thread_ref, status, anchored_by, timestamp, locator, outcome}` and the **outcome directive** (§6.2.1) `{escrow_id, basis, release_bps, refund_bps, penalty_bps, fee_source, basis_anchor}`;
 - the **suite registry** (§6.5) mapping suite IDs → permitted `alg` set + tagged hash.
 
-All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization for hashing: JCS (RFC 8785); digests are algorithm-tagged (§6.5).
+All `body` instances **MUST** validate against the schema registered for their `type`. Canonicalization: JCS (RFC 8785); the signature input is the proof-less **signing form**, and the anchored `object_hash` covers the assembled `proof[]` (§6.3); digests are algorithm-tagged (§6.5).
 
 ### Appendix B: Scenario walkthroughs
 
@@ -839,7 +865,14 @@ An accredited oracle samples tank-7 temperature, captures a C2PA-signed sensor r
 **B.4 Dispute (Pillar III).**
 Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` within the 24 h window → `CHALLENGED`; both post bonds and submit `evidence` (anchored attestations). Pre-agreed arbiter issues a `rule` (30% penalty for late partial delivery). No appeal filed → `FINALIZED`; `enforce` releases 70% to seller, refunds 30% to buyer, and pays the arbiter fee from the loser's bond.
 
-### Appendix C: Changes from v0.1
+### Appendix C: Change Log
+
+#### Changes from v0.2 (v0.3 draft)
+
+- **Signature input & hash coverage defined (§6.1, §6.2, §6.3; review issue #4):** every Object now has two normative canonical forms — the **signing form** (envelope with `proof` removed; the signature input for every proof entry) and the **anchored form** (incl. the assembled `proof[]`; what `object_hash` commits to). All inter-Object hash references use the anchored hash; `proof[]` order is pinned to `signers[]` order; a detached-signature **co-signing flow** specifies how `memorandum` is assembled. This also resolves the v0.2 §7.2 ↔ §8.3 contradiction on single-object multi-signatures.
+- **Chain vs. attachment linkage (§6.1, §7.4, §8.3; review issue #5):** `accept`, `approve`, `witness`, `evidence`, and `revoke` are now **attachment Objects** that reference their target via an anchored hash in `body` (`accepts_hash`, `approves_hash`, `attestation_hash`, `dispute_hash`, `revokes`) and carry `previous_hash: null` — N-party `accept`s therefore no longer fork the linear chain. `sequence` is normatively defined (predecessor + 1 on the chain; the target's value for attachments); the ledger's anchor order is the ordering authority; an `accept` is valid iff its `accepts_hash` equals the head current at its anchoring time.
+
+#### Changes from v0.1 (v0.2)
 
 - **Scope:** single negotiation protocol → three-pillar trust layer (Contracting, Notarization, Dispute Resolution) on a shared identity foundation.
 - **Anchoring:** full terms on-chain → **hash on-chain, payload off-chain** (privacy/GDPR fix).

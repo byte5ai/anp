@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![Status: Draft](https://img.shields.io/badge/status-draft%20concept-orange.svg)](#status)
-[![Spec: v0.2](https://img.shields.io/badge/spec-v0.2-informational.svg)](./SPEC.md)
+[![Spec: v0.3-draft](https://img.shields.io/badge/spec-v0.3--draft-informational.svg)](./SPEC.md)
 
 **An open, DLT-neutral trust layer for agent-to-agent agreements, notarization, and dispute resolution.**
 
@@ -78,7 +78,7 @@ The spec is chain-agnostic. The **reference profile** targets **IOTA Rebased** (
 
 ## Status
 
-**v0.2 — Draft / Concept.** This is a design specification, stable enough to implement against, with unresolved questions explicitly marked ([§16 Open Questions](./SPEC.md#16-open-questions)). It is **not** a final standard. Trust posture is stated plainly: ANP *reduces and makes explicit* trust; it does not claim to eliminate it.
+**v0.3-draft — Draft / Concept.** This is a design specification, stable enough to implement against, with unresolved questions explicitly marked ([§16 Open Questions](./SPEC.md#16-open-questions)). It is **not** a final standard. Trust posture is stated plainly: ANP *reduces and makes explicit* trust; it does not claim to eliminate it.
 
 Roadmap: concept (now) → proof-of-concept per pillar → spec v1.0 → community & ecosystem. See [§17](./SPEC.md#17-roadmap).
 
