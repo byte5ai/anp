@@ -118,7 +118,7 @@ A dedicated implementability check against the current mainnet (protocol v27) fo
 |---|---|---|
 | **Solana** | Finality ~12.8 s today — **Alpenglow is not on mainnet** (live on a community test cluster since 05/2026; mainnet target Q3 2026) | Fees pass (~$0.00025). **Re-evaluate the day Alpenglow activates** (~150 ms promised) — would then be a serious candidate. |
 | **Avalanche** | Finality ~1–2 s — not reliably sub-second | |
-| **Hedera** | Finality ~3 s | HCS fixed-USD fees ($0.0008/msg) are a predictability gold standard, and Hedera runs SHA-384/CNSA-suite internally — but HCS messages are **not smart-contract-readable**, which independently breaks the §6.2.1 uncontested path (see [#6](https://github.com/byte5ai/anp/issues/6)). SPEC §13.4's Hedera row needs this caveat. |
+| **Hedera** | Finality ~3 s | HCS fixed-USD fees ($0.0008/msg) are a predictability gold standard, and Hedera runs SHA-384/CNSA-suite internally — but HCS messages are **not smart-contract-readable**, which independently breaks the §6.2.1 uncontested path (see [#6](https://github.com/byte5ai/anp/issues/6)) — now carried as a caveat in SPEC §13.4's Hedera row. |
 | **Algorand** | Finality ~2.8 s | **The only chain with shipped protocol-level PQC**: Falcon-signed State Proofs (since 2022). Worth watching as PQC prior art despite the finality miss. |
 | **MegaETH** (and "real-time" L2s) | "~10 ms" is centralized-sequencer preconfirmation; true finality inherits Ethereum L1 (~13 min) | No L2 can honestly claim sub-second *finality* today. |
 | **Base / Arbitrum / OP** | L1-anchored finality ~13–17 min | Strongest ERC-8004/EAS/x402 ecosystem — remains the natural home of SPEC §13.3's *interop* profile, just not of sub-second settlement. |

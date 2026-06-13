@@ -74,7 +74,7 @@ ANP **reuses** identity (DID/VC), settlement (native chain), and attestation pat
 
 ## Reference DLT
 
-The spec is chain-agnostic. The **reference profile** targets **IOTA Rebased** (Move VM, sub-second finality, near-zero / sponsored fees). Hard selection criteria for any chain: sub-second finality, a credible post-quantum path at the protocol layer, ultra-low fees, programmable escrow, programmatic wallets. Native EUR/USD stablecoins are a valued nice-to-have. An EVM interoperability profile (ERC-8004 / EAS / x402) is available but optional.
+The spec is chain-agnostic. The **reference profile** targets **IOTA Rebased** (Move VM, sub-second finality, near-zero / sponsored fees). Hard selection criteria for any chain: sub-second finality, ultra-low fees, programmable escrow, programmatic wallets, and post-quantum *pairing* at the binding layer (always satisfiable — ANP's binding signatures are off-chain, §6.5). A chain's *account-level* post-quantum roadmap and native EUR/USD stablecoins are valued nice-to-haves, graded rather than hard (no candidate chain ships PQC accounts today — see [`DLT_EVALUATION.md`](./DLT_EVALUATION.md)). An EVM interoperability profile (ERC-8004 / EAS / x402) is available but optional.
 
 ## Status
 
