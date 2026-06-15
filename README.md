@@ -88,7 +88,7 @@ ANP is open infrastructure and feedback is welcome — see [`CONTRIBUTING.md`](.
 
 ## License
 
-[MIT](./LICENSE) © 2026 byte5.ai
+[MIT](./LICENSE) © 2026 byte5 GmbH
 
 ---
 
