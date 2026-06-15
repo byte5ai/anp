@@ -2,7 +2,7 @@
 
 ## An Open, DLT-Neutral Trust Layer for Agent-to-Agent Agreements, Notarization, and Dispute Resolution
 
-*Concept Paper / Draft Specification — v0.3-draft (June 2026)*
+*Concept Paper / Draft Specification — v0.3 (June 2026)*
 
 **Status:** Draft (Concept). This document is a design specification intended to be stable enough to implement against, while explicitly marking unresolved questions. It is not a final standard.
 
@@ -916,7 +916,7 @@ Conformance levels: **Minimal** = Core + exactly one of {Notarization, Contracti
 
 ## 17. Roadmap
 
-**Phase 1 — This document (now).** Publish the concept/draft spec (v0.2, May 2026; v0.3 draft under review); gather feedback; refine.
+**Phase 1 — This document (now).** Publish the concept/draft spec (v0.2, May 2026; v0.3, June 2026); gather feedback; refine.
 
 **Phase 2 — Proof of Concept (per pillar).**
 - *Contracting:* two agents negotiate a structured service agreement; Objects anchored on IOTA testnet; mandate-gated approval; settlement via a completion `assert` backed by accepted criteria, then an uncontested `enforce`.
@@ -966,7 +966,7 @@ Seller asserts "delivered, criteria met" → `ASSERTED`. Buyer files `dispute` w
 
 ### Appendix C: Change Log
 
-#### Changes from v0.2 (v0.3 draft)
+#### Changes from v0.2 (v0.3)
 
 - **Signature input & hash coverage defined (§6.1, §6.2, §6.3; review issue #4):** every Object now has two normative canonical forms — the **signing form** (envelope with `proof` removed; the signature input for every proof entry) and the **anchored form** (incl. the assembled `proof[]`; what `object_hash` commits to). All inter-Object hash references use the anchored hash; `proof[]` order is pinned to `signers[]` order; a detached-signature **co-signing flow** specifies how `memorandum` is assembled. This also resolves the v0.2 §7.2 ↔ §8.3 contradiction on single-object multi-signatures.
 - **Chain vs. attachment linkage (§6.1, §7.4, §8.3; review issue #5):** `accept`, `approve`, `witness`, `evidence`, and `revoke` are now **attachment Objects** that reference their target via an anchored hash in `body` (`accepts_hash`, `approves_hash`, `attestation_hash`, `dispute_hash`, `revokes`) and carry `previous_hash: null` — N-party `accept`s therefore no longer fork the linear chain. `sequence` is normatively defined (predecessor + 1 on the chain; the target's value for attachments); the ledger's anchor order is the ordering authority; an `accept` is valid iff its `accepts_hash` equals the head current at its anchoring time.
